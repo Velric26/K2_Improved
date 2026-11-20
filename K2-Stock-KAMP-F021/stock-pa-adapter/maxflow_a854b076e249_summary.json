@@ -1,0 +1,163 @@
+{
+  "slot": "1C",
+  "material": "ABS",
+  "nozzle_mm": 0.4,
+  "temperature_c": 280,
+  "preset_mm3_s": 32.0,
+  "start_mm3_s": 15,
+  "planned_min_mm3_s": 8,
+  "planned_max_mm3_s": 40,
+  "tested_through_mm3_s": 35,
+  "algorithm": "servo_current_threshold",
+  "search": "adaptive",
+  "step_seconds": 16,
+  "measurement_seconds": 8,
+  "estimated_iq_per_mm3_s": 0.04,
+  "max_probes": 8,
+  "current_cutoff": 1.0,
+  "boundary_mm3_s": 35,
+  "recommended_mm3_s": 35,
+  "steps": [
+    {
+      "flow_mm3_s": 15,
+      "start_s": 0.0,
+      "end_s": 16.0,
+      "planner_gap_s": null,
+      "motion_verified": true,
+      "filament_commanded_mm": 99.78040513842909,
+      "motor_median_abs_iq": 0.41106486320495605,
+      "motor_peak_abs_iq": 0.5613579750061035,
+      "motor_samples": 64,
+      "settled_motor_samples": 31,
+      "motor_status": [
+        0
+      ],
+      "capture": "stock_pa_direct_maxflow_a854b076e249_1.json",
+      "motor_missed": 0
+    },
+    {
+      "flow_mm3_s": 29,
+      "start_s": 0.0,
+      "end_s": 16.0,
+      "planner_gap_s": null,
+      "motion_verified": true,
+      "filament_commanded_mm": 192.90878326762956,
+      "motor_median_abs_iq": 0.7564718127250671,
+      "motor_peak_abs_iq": 0.9531515836715698,
+      "motor_samples": 64,
+      "settled_motor_samples": 31,
+      "motor_status": [
+        0
+      ],
+      "capture": "stock_pa_direct_maxflow_a854b076e249_2.json",
+      "motor_missed": 0
+    },
+    {
+      "flow_mm3_s": 30,
+      "start_s": 0.0,
+      "end_s": 16.0,
+      "planner_gap_s": null,
+      "motion_verified": true,
+      "filament_commanded_mm": 199.56081027685818,
+      "motor_median_abs_iq": 0.7524855732917786,
+      "motor_peak_abs_iq": 1.0588189363479614,
+      "motor_samples": 64,
+      "settled_motor_samples": 31,
+      "motor_status": [
+        0
+      ],
+      "capture": "stock_pa_direct_maxflow_a854b076e249_3.json",
+      "motor_missed": 0
+    },
+    {
+      "flow_mm3_s": 31,
+      "start_s": 0.0,
+      "end_s": 16.0,
+      "planner_gap_s": null,
+      "motion_verified": true,
+      "filament_commanded_mm": 206.21283728608677,
+      "motor_median_abs_iq": 0.8240101337432861,
+      "motor_peak_abs_iq": 1.1148333549499512,
+      "motor_samples": 64,
+      "settled_motor_samples": 31,
+      "motor_status": [
+        0
+      ],
+      "capture": "stock_pa_direct_maxflow_a854b076e249_4.json",
+      "motor_missed": 0
+    },
+    {
+      "flow_mm3_s": 32,
+      "start_s": 0.0,
+      "end_s": 16.0,
+      "planner_gap_s": null,
+      "motion_verified": true,
+      "filament_commanded_mm": 212.86486429531539,
+      "motor_median_abs_iq": 0.909787118434906,
+      "motor_peak_abs_iq": 1.2130846977233887,
+      "motor_samples": 64,
+      "settled_motor_samples": 31,
+      "motor_status": [
+        0
+      ],
+      "capture": "stock_pa_direct_maxflow_a854b076e249_5.json",
+      "motor_missed": 0
+    },
+    {
+      "flow_mm3_s": 33,
+      "start_s": 0.0,
+      "end_s": 16.0,
+      "planner_gap_s": null,
+      "motion_verified": true,
+      "filament_commanded_mm": 219.516891304544,
+      "motor_median_abs_iq": 0.9742377996444702,
+      "motor_peak_abs_iq": 1.2094521522521973,
+      "motor_samples": 64,
+      "settled_motor_samples": 31,
+      "motor_status": [
+        0
+      ],
+      "capture": "stock_pa_direct_maxflow_a854b076e249_6.json",
+      "motor_missed": 0
+    },
+    {
+      "flow_mm3_s": 34,
+      "start_s": 0.0,
+      "end_s": 16.0,
+      "planner_gap_s": null,
+      "motion_verified": true,
+      "filament_commanded_mm": 226.1689183137726,
+      "motor_median_abs_iq": 0.9716120958328247,
+      "motor_peak_abs_iq": 1.3672171831130981,
+      "motor_samples": 64,
+      "settled_motor_samples": 31,
+      "motor_status": [
+        0
+      ],
+      "capture": "stock_pa_direct_maxflow_a854b076e249_7.json",
+      "motor_missed": 0
+    },
+    {
+      "flow_mm3_s": 35,
+      "start_s": 0.0,
+      "end_s": 16.0,
+      "planner_gap_s": null,
+      "motion_verified": true,
+      "filament_commanded_mm": 232.8209453230012,
+      "motor_median_abs_iq": 1.0538499355316162,
+      "motor_peak_abs_iq": 1.4375516176223755,
+      "motor_samples": 63,
+      "settled_motor_samples": 31,
+      "motor_status": [
+        0
+      ],
+      "capture": "stock_pa_direct_maxflow_a854b076e249_8.json",
+      "motor_missed": 0
+    }
+  ],
+  "capture": "maxflow_a854b076e249_summary.json",
+  "reason": "current_cutoff",
+  "boundary_median_abs_iq": 1.0538499355316162,
+  "below_cutoff_mm3_s": 34,
+  "below_cutoff_median_abs_iq": 0.9716120958328247
+}

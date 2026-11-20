@@ -1,0 +1,456 @@
+"""Loopback companion for Orca's stock K2 extrusion calibrations."""
+
+import argparse
+import json
+import math
+import threading
+import time
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
+from urllib.parse import urlsplit
+from uuid import uuid4
+
+from run_direct_pa_refinement import measure as measure_direct, rank as rank_direct
+from run_max_flow import COMMAND as CURRENT_FLOW_COMMAND, MIN_FLOW, SLOT_SUPPORT, MaxFlowRun, probe_ceiling
+from run_short_pa_sweep import MOTION, PROFILES, SENSOR, Sweep, limit_command, motion_limits, preset_flows
+
+PA_PEAK_LIMIT = 24
+EXTENDED_PA_SUPPORT = "measured Max Flow peak"  # Capability advertised by the installed adapter.
+PA_TEMPERATURES = {"PETG": (230, 240), "ABS": (280,)}
+
+
+class Cancelled(RuntimeError):
+    pass
+
+
+def pa_peak_limit(slot, material, temperature):
+    if temperature == PROFILES[material][1]:
+        return probe_ceiling(slot, material)
+    return PA_PEAK_LIMIT
+
+
+def check_request(payload, printer_host):
+    if not isinstance(payload, dict) or payload.get("printer") != printer_host:
+        raise ValueError("The calibration helper is configured for a different K2.")
+    slot, material = payload.get("slot"), payload.get("material")
+    if slot not in ("1A", "1B", "1C", "1D") or material not in ("ABS", "PETG"):
+        raise ValueError("Select an ABS or PETG spool in CFS unit 1.")
+    mode = payload.get("kind", "pressure_advance")
+    if mode not in ("pressure_advance", "max_flow", "flow_then_pa"):
+        raise ValueError("Unknown K2 calibration type.")
+    reader = payload.get("reader")
+    direct = reader == "continuous"
+    if reader is not None and (not direct or mode != "pressure_advance"):
+        raise ValueError("Unknown pressure advance reader.")
+    temperatures = PA_TEMPERATURES[material] if direct else (PROFILES[material][1],)
+    if payload.get("nozzle_mm") != 0.4 or payload.get("temperature_c") not in temperatures:
+        raise ValueError("Use a 0.4 mm nozzle and a supported temperature for this material.")
+    if mode in ("max_flow", "flow_then_pa") or any(key in payload for key in
+                                ("max_flow_mm3_s", "filament_diameter_mm", "lower_flow_mm3_s")):
+        values = (payload.get("max_flow_mm3_s"), payload.get("filament_diameter_mm"))
+        if any(type(value) not in (int, float) or not math.isfinite(value) or value <= 0 for value in values):
+            raise ValueError("Set positive max volumetric speed and filament diameter values in Orca.")
+    if "lower_flow_mm3_s" in payload:
+        lower_flow = payload["lower_flow_mm3_s"]
+        peak = payload["max_flow_mm3_s"]
+        if (mode != "pressure_advance" or type(lower_flow) not in (int, float)
+                or not math.isfinite(lower_flow) or not 0 < lower_flow <= peak
+                or (not direct and lower_flow == peak)):
+            raise ValueError("Use positive PA flows in ascending order. Only the continuous reader can use equal peaks.")
+    if mode == "flow_then_pa":
+        for wall in ("outer", "inner"):
+            key = f"{wall}_wall_flow_mm3_s"
+            if wall == "inner" and key not in payload:
+                continue  # Older clients only send the outer wall.
+            flow = payload.get(key)
+            if type(flow) not in (int, float) or not math.isfinite(flow) or flow < 0:
+                raise ValueError(f"Set a valid {wall}-wall flow target for the combined calibration.")
+    if direct:
+        limit = pa_peak_limit(slot[1], material, payload["temperature_c"])
+        if "lower_flow_mm3_s" not in payload or payload["max_flow_mm3_s"] > limit:
+            raise ValueError(f"Continuous Auto PA requires two flow targets with a peak at or below {limit:g} mm³/s.")
+    return slot[1], material
+
+
+def prepare_slot(sweep, state, recover_unassigned=False):
+    check_cancel = sweep.check_cancel or (lambda: None)
+    sweep.check_slot(state)
+    box = state["box"]
+    current = box["T1"]["filament"]
+    detected = state[SENSOR]["filament_detected"]
+    recover = False
+    if detected and current not in ("A", "B", "C", "D"):
+        recover = (recover_unassigned and current in (None, "None") and box.get("enable") == 1
+                   and box.get("filament") == 1)
+        if not recover:
+            raise RuntimeError("The nozzle detects filament, but the K2 cannot confirm CFS unit 1 as its source.")
+
+    if state["toolhead"]["homed_axes"] != "xyz":
+        sweep.send("G28", "M400", timeout=150)
+    check_cancel()
+    sweep.send("BOX_GO_TO_EXTRUDE_POS", "M400")
+    if current != sweep.slot or not detected:
+        if detected and not recover:
+            sweep.send("BOX_QUIT_MATERIAL", "M400", timeout=200)
+            if sweep.status()[SENSOR]["filament_detected"]:
+                raise RuntimeError("The filament sensor did not clear after the stock unload.")
+        check_cancel()
+        address = f"T1{sweep.slot}"
+        try:
+            if recover:
+                # Match the stock load sequence for a nozzle that already contains filament.
+                # The stock retract command resolves the existing strand before a new slot is fed.
+                sweep.send("BOX_LOAD_MATERIAL_HEATING", "BOX_LOAD_MATERIAL_CUT_MATERIAL",
+                           "BOX_LOAD_MATERIAL_RETRUDE_MATERIAL", "M400", timeout=240)
+                if sweep.status()[SENSOR]["filament_detected"]:
+                    raise RuntimeError("The stock CFS recovery did not clear the nozzle filament sensor.")
+                check_cancel()
+                sweep.send(f"M109 S{sweep.temperature}", timeout=130)
+            else:
+                sweep.send("BOX_GO_TO_EXTRUDE_POS", f"M109 S{sweep.temperature}", "BOX_SAVE_FAN", timeout=130)
+            sweep.send(f"BOX_LOAD_MATERIAL_EXTRUDE_MATERIAL TNN={address}",
+                       f"BOX_LOAD_MATERIAL_MATERIAL_FLUSH TNN={address}", "BOX_LOAD_MATERIAL_END",
+                       "M400", timeout=260)
+        except Exception:
+            if sweep.idle(sweep.status()):
+                sweep.send("BOX_RESTORE_FAN")
+            raise
+    sweep.check_filament(sweep.status())
+    check_cancel()
+    sweep.send(f"M109 S{sweep.temperature}", "BOX_NOZZLE_CLEAN",
+               "BOX_GO_TO_EXTRUDE_POS", f"M109 S{sweep.temperature}", "M400", timeout=130)
+
+
+def run_calibration(host, output, request, cancel, update):
+    slot, material = check_request(request, urlsplit(host).hostname)
+    max_flow = request.get("max_flow_mm3_s")
+    diameter = request.get("filament_diameter_mm")
+    lower_flow = request.get("lower_flow_mm3_s")
+    find_max_flow = request.get("kind") == "max_flow"
+    direct = request.get("reader") == "continuous"
+    extended_stroke = direct and max_flow > PA_PEAK_LIMIT
+
+    def check_cancel():
+        if cancel.is_set():
+            raise Cancelled("Calibration canceled.")
+
+    stamp = time.strftime("%H%M%S")
+    sweep = Sweep(host, output, stamp, slot, material, check_cancel)
+    flow_run = None
+    if direct:
+        sweep.temperature = int(request["temperature_c"])
+    state = sweep.status()
+    ext = state["extruder"]
+    if (not sweep.idle(state) or ext["target"] != 0 or state["heater_bed"]["target"] != 0
+            or ext["nozzle_diameter"] != 0.4):
+        raise RuntimeError("The K2 must be idle, with heaters off, a 0.4 mm nozzle and the pressure adapter loaded.")
+    if direct or find_max_flow:
+        commands = sweep.read("/printer/gcode/help")["result"]
+        command = CURRENT_FLOW_COMMAND if find_max_flow else "STOCK_PA_DIRECT_PA_STROKE"
+        if command not in commands or "STOCK_PA_CAPTURE" not in commands:
+            feature = "Auto Max Flow" if find_max_flow else "Auto PA"
+            raise RuntimeError(f"The printer needs the continuous {feature} adapter ({command}).")
+        if find_max_flow and f"minimum {MIN_FLOW} mm3/s" not in commands[command]:
+            raise RuntimeError("Update the printer's Auto Max Flow adapter to enable below-threshold probes.")
+        if find_max_flow and SLOT_SUPPORT not in commands[command]:
+            raise RuntimeError("Update the printer's Auto Max Flow adapter for the current CFS slot support.")
+        if extended_stroke:
+            stroke = commands.get("STOCK_PA_DIRECT_STROKE", "")
+            if EXTENDED_PA_SUPPORT not in stroke:
+                raise RuntimeError(f"The printer adapter must support Auto PA above {PA_PEAK_LIMIT:g} mm³/s.")
+    elif not state["k2_stock_pa_capture"]:
+        raise RuntimeError("The stock pressure adapter has no capture yet.")
+    if direct:
+        original_limits = motion_limits(state)
+        direct_report = {"slot": f"1{slot}", "material": material, "temperature_c": sweep.temperature,
+                         "flows": {"LOWER": lower_flow, "PEAK": max_flow}, "prime_mm_per_stroke": 3.,
+                         "captures": [], "completed": False}
+    sweep.check_slot(state)
+    if max_flow is not None:
+        settings = sweep.read("/printer/objects/query?configfile=settings")
+        extruder = settings["result"]["status"]["configfile"]["settings"]["extruder"]
+        if find_max_flow:
+            flow_run = MaxFlowRun(sweep, diameter, update, extruder)
+        else:
+            firmware_area = math.pi * (extruder["filament_diameter"] / 2) ** 2
+            firmware_limit = extruder["max_extrude_cross_section"]
+            bands = preset_flows(max_flow, diameter, lower_flow)
+            if any(speed * firmware_area / (move[1] / 60) > firmware_limit
+                   for band in bands for speed, move in zip(band, MOTION, strict=True)):
+                raise RuntimeError("A PA flow target exceeds the firmware's extrusion limit for this test.")
+            if extended_stroke and (
+                    not math.isclose(diameter, extruder["filament_diameter"], rel_tol=.005)
+                    or any(speed > extruder["max_extrude_only_velocity"]
+                           or speed * duration > extruder["max_extrude_only_distance"]
+                           for band in bands
+                           for speed, (_, _, duration) in zip(band, MOTION, strict=True))):
+                raise RuntimeError("The requested PA peak exceeds the printer's filament diameter or extrusion-only limits.")
+    check_cancel()
+    pa, smooth = ext["pressure_advance"], ext["smooth_time"]
+    sweep.send("SAVE_GCODE_STATE NAME=orca_pa_calibration")
+    try:
+        update("Preparing the toolhead, loading filament and wiping the nozzle.")
+        prepare_slot(sweep, state, recover_unassigned=direct or find_max_flow)
+        check_cancel()
+        if find_max_flow:
+            result = flow_run.run(max_flow)
+        elif direct:
+            measure_direct(sweep, direct_report["flows"], stamp, direct_report, update=update,
+                           diameter=diameter, extended_stroke=extended_stroke)
+            rows, winner, limits, tie = rank_direct(direct_report["captures"])
+            if len(rows) < 2:
+                winner = None
+            candidate = winner["pa"] if winner else None
+            reason = "accepted" if winner else ("lower_flow_limits" if len(rows) >= 2 else "insufficient_repeats")
+            result = {"candidate": candidate, "assessment": {"reason": reason},
+                      "flow_sweeps": [{"peak_mm3_s": lower_flow}, {"peak_mm3_s": max_flow}],
+                      "scores": rows, "selected_scores": winner["scores"] if winner else None,
+                      "lower_limits": limits, "peak_tie": tie}
+            direct_report.update(result)
+            direct_report["completed"] = True
+        elif max_flow is None:
+            update("Measuring pressure and wiping the nozzle between pairs.")
+            result = sweep.run(preheated=True)
+        else:
+            update("Measuring pressure and wiping the nozzle between pairs.")
+            result = sweep.run(preheated=True, max_flow=max_flow, diameter=diameter, update=update, lower_flow=lower_flow)
+        check_cancel()
+    finally:
+        if not sweep.idle(sweep.status()):
+            raise RuntimeError("The printer state changed before cleanup could be verified.")
+        cleanup = ["M104 S0"]
+        if find_max_flow:
+            cleanup.append("M400")
+        if direct:
+            cleanup.append(limit_command(original_limits))
+        sweep.send(*cleanup, f"SET_PRESSURE_ADVANCE ADVANCE={pa:.12g} SMOOTH_TIME={smooth:.12g}",
+                   "RESTORE_GCODE_STATE NAME=orca_pa_calibration MOVE=0")
+        final_state = sweep.status()
+        final = final_state["extruder"]
+        if (final["target"], final["pressure_advance"], final["smooth_time"]) != (0, pa, smooth):
+            raise RuntimeError("Could not verify nozzle shutdown and restoration of the original pressure advance.")
+        sweep.park_after_purge(final_state)
+        if ((direct and motion_limits(final_state) != original_limits)
+                or ((direct or find_max_flow) and final_state["heater_bed"]["target"])):
+            raise RuntimeError("Could not verify the original motion limits and bed heater state.")
+        if (direct and direct_report["captures"]) or (flow_run and flow_run.started_capture):
+            sweep.send(f"STOCK_PA_CAPTURE WINDOWS=4 NAME=orca_direct_handoff_{stamp}")
+            final_state = sweep.status()
+            sweep.check_filament(final_state)
+            if final_state["toolhead"]["homed_axes"] != "xyz" or not final_state["k2_stock_pa_capture"]["samples"]:
+                raise RuntimeError("Could not verify homing and the stock reader after calibration.")
+            if direct:
+                direct_report["stock_handoff"] = final_state["k2_stock_pa_capture"]
+        if direct:
+            report_path = sweep.folder / f"{sweep.run_name}_direct_summary.json"
+            report_path.write_text(json.dumps(direct_report, indent=2), encoding="utf-8")
+            if direct_report["completed"]:
+                result["report_file"] = str(report_path.resolve())
+
+    result.update(slot=f"1{slot}", material=material, nozzle_mm=0.4, temperature_c=sweep.temperature)
+    if not find_max_flow and result["candidate"] is not None:
+        record = {"schema": 1, "slot": result["slot"], "material": material,
+                  "material_code": sweep.material_code, "nozzle_mm": 0.4,
+                  "temperature_c": sweep.temperature, "pressure_advance": result["candidate"],
+                  "validation": "pressure_sweep", "source": f"{sweep.run_name}_summary.json"}
+        if direct:
+            record.update(validation="continuous_pressure_sweep", source=Path(result["report_file"]).name)
+        if max_flow is not None:
+            record.update(max_flow_mm3_s=max_flow, filament_diameter_mm=diameter)
+        if lower_flow is not None:
+            record["lower_flow_mm3_s"] = lower_flow
+        sweep.read("/server/database/item", {"namespace": "k2_pa_calibration",
+                   "key": f"slot_{slot.lower()}_{material.lower()}", "value": record})
+    return result
+
+
+def run_job(host, output, request, cancel, update):
+    if request.get("kind") != "flow_then_pa":
+        return run_calibration(host, output, request, cancel, update)
+
+    update("Step 1 of 2. Measuring max flow.")
+    flow_request = {**request, "kind": "max_flow"}
+    flow = run_calibration(host, output, flow_request, cancel, lambda text: update("Max Flow · " + text))
+    result = {"max_flow": flow, "pressure_advance": None, "pa_state": "skipped",
+              "pa_message": "Auto PA was skipped because Max Flow found no verified cutoff."}
+    measured = flow.get("recommended_mm3_s")
+    if measured is None:
+        return result
+
+    peak = measured
+    outer = request["outer_wall_flow_mm3_s"]
+    if "inner_wall_flow_mm3_s" in request:
+        lower = min(outer or peak, request["inner_wall_flow_mm3_s"] or peak, peak)
+    else:
+        lower = outer if 0 < outer < peak else peak * .5
+    pa_request = {**request, "kind": "pressure_advance", "reader": "continuous",
+                  "max_flow_mm3_s": peak, "lower_flow_mm3_s": lower}
+    result.update(pa_peak_mm3_s=peak, pa_lower_mm3_s=lower)
+    if cancel.is_set():
+        result.update(pa_state="canceled", pa_message="Auto PA was canceled before starting.")
+        return result
+
+    update(f"Step 2 of 2. Measuring Auto PA at {lower:.4g} and {peak:.4g} mm³/s.")
+    try:
+        pa = run_calibration(host, output, pa_request, cancel, lambda text: update("Auto PA · " + text))
+    except Cancelled as error:
+        result.update(pa_state="canceled", pa_message=str(error))
+    except Exception as error:
+        result.update(pa_state="failed", pa_message=str(error))
+    else:
+        result.update(pressure_advance=pa, pa_state="complete", pa_message="")
+    return result
+
+
+def cfs_slots(host, output):
+    box = Sweep(host, output, "slots", "A").read("/printer/objects/query?box")["result"]["status"]["box"]
+    if box["state"] != "connect":
+        raise RuntimeError("CFS unit 1 is disconnected.")
+    unit = box["T1"]
+    materials = {profile[0]: name for name, profile in PROFILES.items()}
+    slots = []
+    for index, letter in enumerate("ABCD"):
+        address = f"1{letter}"
+        if box["map"].get("T" + address) != "T" + address:
+            continue
+        material = materials.get(unit["material_type"][index])
+        if material is None:
+            continue
+        slots.append({"slot": address, "material": material, "loaded": unit["filament"] == letter,
+                      "max_flow": True, "pa_peak_limits_mm3_s": {
+                          str(temperature): pa_peak_limit(letter, material, temperature)
+                          for temperature in PA_TEMPERATURES[material]
+                      }})
+    return slots
+
+
+class CalibrationServer(ThreadingHTTPServer):
+    def __init__(self, port, host, output):
+        super().__init__(("127.0.0.1", port), Handler)
+        self.host = host
+        self.output = output
+        self.lock = threading.Lock()
+        self.jobs = {}
+        self.active_id = None
+        self.cancel = threading.Event()
+
+    def start_calibration(self, payload):
+        check_request(payload, urlsplit(self.host).hostname)
+        with self.lock:
+            if self.active_id is not None:
+                raise RuntimeError("A calibration is already running.")
+            self.cancel.clear()
+            job_id = uuid4().hex
+            job = {"id": job_id, "state": "running", "message": "Checking the K2."}
+            self.jobs[job_id] = job
+            if len(self.jobs) > 8:
+                del self.jobs[next(iter(self.jobs))]
+            self.active_id = job_id
+            threading.Thread(target=self.work, args=(job_id, payload), daemon=False).start()
+            return dict(job)
+
+    def work(self, job_id, payload):
+        def update(message):
+            with self.lock:
+                self.jobs[job_id]["message"] = message
+
+        try:
+            result = run_job(self.host, self.output, payload, self.cancel, update)
+            outcome = {"state": "complete", "result": result}
+        except Cancelled as error:
+            outcome = {"state": "canceled", "message": str(error)}
+        except Exception as error:
+            outcome = {"state": "failed", "message": str(error)}
+        with self.lock:
+            self.jobs[job_id].update(outcome)
+            self.active_id = None
+
+
+class Handler(BaseHTTPRequestHandler):
+    def reply(self, status, value):
+        data = json.dumps(value).encode()
+        self.send_response(status)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(data)))
+        self.end_headers()
+        self.wfile.write(data)
+
+    def do_POST(self):
+        if self.path != "/calibrations":
+            self.reply(404, {"message": "Unknown calibration endpoint."})
+            return
+        if self.headers.get("Origin") or self.headers.get_content_type() != "application/json":
+            self.reply(403, {"message": "Send calibration requests from Orca."})
+            return
+        try:
+            size = int(self.headers.get("Content-Length", "0"))
+            if not 0 < size <= 2048:
+                raise ValueError("Invalid calibration request length.")
+            payload = json.loads(self.rfile.read(size))
+            job = self.server.start_calibration(payload)
+        except ValueError as error:
+            self.reply(400, {"message": str(error)})
+        except RuntimeError as error:
+            self.reply(409, {"message": str(error)})
+        else:
+            self.reply(202, job)
+
+    def job_response(self, cancel=False):
+        prefix = "/calibrations/"
+        job_id = self.path[len(prefix):] if self.path.startswith(prefix) else ""
+        with self.server.lock:
+            job = self.server.jobs.get(job_id)
+            if job is None:
+                response = None
+            else:
+                if cancel and self.server.active_id == job_id:
+                    self.server.cancel.set()
+                response = dict(job)
+        if response is None:
+            self.reply(404, {"message": "Calibration not found."})
+        else:
+            self.reply(200, response)
+
+    def do_GET(self):
+        if self.path == "/health":
+            self.reply(200, {"service": "k2-auto-pa", "printer": urlsplit(self.server.host).hostname,
+                             "preset_flow": True, "outer_wall_flow": True, "direct_pa_refinement": True,
+                             "pa_timing": True,
+                             "max_flow_calibration": True, "adaptive_current_max_flow": True,
+                             "bracketed_current_max_flow": True, "combined_calibration": True,
+                             "combined_pa_measured_peak": True,
+                             "standalone_pa_uses_preset_flow": True,
+                             "standalone_pa_uses_wall_flows": True,
+                             "pa_peak_limit_mm3_s": PA_PEAK_LIMIT})
+            return
+        if self.path == "/slots":
+            try:
+                slots = cfs_slots(self.server.host, self.server.output)
+            except (KeyError, IndexError, OSError, RuntimeError, ValueError) as error:
+                self.reply(503, {"message": str(error)})
+            else:
+                self.reply(200, {"slots": slots})
+            return
+        self.job_response()
+
+    def do_DELETE(self):
+        if self.headers.get("Origin"):
+            self.reply(403, {"message": "Cancel calibrations from Orca."})
+            return
+        self.job_response(cancel=True)
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--host", required=True, help="Moonraker URL for the stock K2.")
+    parser.add_argument("--port", type=int, default=8766)
+    parser.add_argument("--output", type=Path, default=Path(__file__).resolve().parent)
+    args = parser.parse_args()
+    args.output.mkdir(parents=True, exist_ok=True)
+    with CalibrationServer(args.port, args.host, args.output) as server:
+        print(f"Orca Auto PA listening on 127.0.0.1:{args.port}", flush=True)
+        server.serve_forever()
+
+
+if __name__ == "__main__":
+    main()

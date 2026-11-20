@@ -1,0 +1,11 @@
+__pycache__/
+.venv/
+*.py[cod]
+*.log
+*.bak
+.env
+/K2-Stock-KAMP-F021/stock-pa-adapter/stock_pa_direct_*.json
+/K2-Stock-KAMP-F021/stock-pa-adapter/maxflow_*_summary.json
+!/K2-Stock-KAMP-F021/stock-pa-adapter/maxflow_0f9db75bec5e_summary.json
+!/K2-Stock-KAMP-F021/stock-pa-adapter/maxflow_a854b076e249_summary.json
+!/K2-Stock-KAMP-F021/stock-pa-adapter/maxflow_da37b97ce73c_summary.json
