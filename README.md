@@ -22,6 +22,8 @@ To start the companion automatically, run `.\K2-Orca-CFS\Install-K2-Companion-Au
 
 Calibration constants (material codes, flow ceilings and test plans) live only in the PC companion. The printer adapter checks hardware bounds: the 150–300 °C nozzle range and the live extruder limits.
 
+Auto Max Flow predicts where the extruder current crosses its cutoff with one formula per material, `Iq = a + b0 · (0.4 / nozzle)^n · e^(−k·(T − 250)/10) · flow`. Each finished run updates the fit in `%LOCALAPPDATA%\K2AutoPA\reports\flow_model.json`, which stores running sums rather than points. Without data for a material, the search measures two flows and extrapolates.
+
 To run the archived-run replay and companion tests offline, use the repository’s adapter folder.
 
 ```powershell

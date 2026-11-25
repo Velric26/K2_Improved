@@ -456,6 +456,12 @@ class CalibrationServer(ThreadingHTTPServer):
 
 
 class Handler(BaseHTTPRequestHandler):
+    def log_message(self, format, *args):
+        # Orca polls job status every second. Log only requests that change something or fail.
+        if self.command == "GET" and str(args[1] if len(args) > 1 else "").startswith("2"):
+            return
+        super().log_message(format, *args)
+
     def reply(self, status, value):
         data = json.dumps(value).encode()
         self.send_response(status)

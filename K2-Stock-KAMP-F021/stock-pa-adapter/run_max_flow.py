@@ -4,6 +4,7 @@ import json
 import math
 from uuid import uuid4
 
+from flow_model import FlowModel, cutoff, fit_line
 from run_sustained_flow import MAP_FLOWS, analyze_map, check_extrusion_limits, move_to_flow_position
 
 
@@ -17,15 +18,14 @@ MAX_PROBES = 8
 ABS_06_CEILING = 48
 # Capability text the printer adapter advertises once it takes its flow limits from this companion.
 HOST_LIMITS = "host-defined limits"
-# Approximate slopes around the threshold in the archived stock PETG and ABS sweeps.
-ESTIMATED_SLOPE = {"PETG": .05, "ABS": .04}
-# The 0.6 mm ABS trace rose by about .0225 per mm³/s over 15–39 and .06 near 39.
-ABS_06_SLOPE = .0225
-ABS_06_REFERENCE = (39, .06)
+# Without a model, the second probe goes this far above the first so the line has a usable span.
+NO_MODEL_STEP = 10
+MIN_FIT_SPREAD = 5
+MODEL_FILE = "flow_model.json"
 
 
 def probe_ceiling(slot, material, nozzle_mm=.4):
-    if slot not in ("A", "B", "C", "D") or material not in ESTIMATED_SLOPE:
+    if slot not in ("A", "B", "C", "D") or material not in ("ABS", "PETG"):
         raise ValueError("Auto Max Flow supports ABS or PETG in CFS unit 1.")
     if material == "ABS" and nozzle_mm == .6:
         return ABS_06_CEILING
@@ -33,7 +33,14 @@ def probe_ceiling(slot, material, nozzle_mm=.4):
     return MAP_FLOWS[reference_slot][-1]
 
 
-def search_current(probe, ceiling, slope, reference=None):
+def search_current(probe, ceiling, prior=None):
+    """Find the adjacent flow pair where the median servo current reaches the cutoff.
+
+    prior is the model's (intercept, slope) for this nozzle and temperature, or None. Each next
+    probe aims just below the predicted crossing. With two or more probes the run's own line is
+    used. With one probe, the model slope through that probe is used, and without a model the
+    second probe is NO_MODEL_STEP higher so two points can set the line.
+    """
     currents = {}
 
     def measure(flow):
@@ -41,37 +48,57 @@ def search_current(probe, ceiling, slope, reference=None):
             currents[flow] = probe(flow)
         return currents[flow]
 
-    def estimate_below(flow, iq, slope, end):
-        crossing = flow + (CURRENT_CUTOFF - iq) / slope
-        return min(end, max(flow + 1, math.ceil(crossing) - 1))
+    def is_above(flow):
+        return currents[flow] >= CURRENT_CUTOFF
 
-    first = measure(START_FLOW)
-    if first >= CURRENT_CUTOFF:
-        flow = START_FLOW - 1
-    else:
-        initial_limit = reference[0] if reference else ceiling - 1
-        flow = estimate_below(START_FLOW, first, slope, initial_limit)
+    def bracket():
+        above = [f for f in currents if is_above(f)]
+        if above and min(above) - 1 in currents and not is_above(min(above) - 1):
+            return min(above) - 1, min(above)
+        return None
+
+    def predicted():
+        points = sorted(currents.items())
+        line = None
+        if len(points) >= 2 and points[-1][0] - points[0][0] >= MIN_FIT_SPREAD:
+            line = fit_line(points)
+        if line is None and prior is not None:
+            flow, iq = min(points, key=lambda point: abs(point[1] - CURRENT_CUTOFF))
+            line = (iq - prior[1] * flow, prior[1])
+        return cutoff(*line) if line else None
+
+    def next_flow():
+        above = [f for f in currents if is_above(f)]
+        hi = min(above, default=ceiling + 1)
+        lo = max((f for f in currents if not is_above(f) and f < hi), default=MIN_FLOW - 1)
+        if lo in currents and hi in currents:
+            # Both sides are measured: interpolate between them (the run's line overshoots near the top).
+            estimate = lo + (CURRENT_CUTOFF - currents[lo]) * (hi - lo) / (currents[hi] - currents[lo])
+        else:
+            estimate = predicted()
+        target = START_FLOW + NO_MODEL_STEP if estimate is None else math.ceil(round(estimate, 6)) - 1
+        flow = min(max(target, lo + 1), hi - 1, ceiling)
+        if not above and len(currents) >= MAX_PROBES - 2:
+            # Keep the last two probes for the top adjacent pair while every probe is below cutoff.
+            flow = max(flow, ceiling - (MAX_PROBES - 1 - len(currents)))
+        if flow in currents:
+            flow = lo + 1 if lo + 1 not in currents else hi - 1
+        if flow in currents or not MIN_FLOW <= flow <= ceiling:
+            return None
+        return flow
+
+    flow = START_FLOW
     check_dip = True
-    while flow in currents or len(currents) < MAX_PROBES:
-        if (len(currents) >= MAX_PROBES - 2 and flow not in currents
-                and all(iq < CURRENT_CUTOFF for iq in currents.values())):
-            # Reserve the final two probes for the top adjacent pair if the search is still below cutoff.
-            top_pair = ceiling - (MAX_PROBES - 1 - len(currents))
-            if flow < top_pair and top_pair not in currents:
-                flow = top_pair
+    while True:
         iq = measure(flow)
         above = iq >= CURRENT_CUTOFF
         if not above and flow == ceiling:
             return {"reason": "current_below_threshold"}
         if above and flow == MIN_FLOW:
             break
-        if not above and reference and flow == reference[0] and len(currents) == 2:
-            flow = estimate_below(flow, iq, reference[1], min(flow + 4, ceiling - 1))
-            continue
-
-        adjacent = flow - 1 if above else flow + 1
-        if adjacent in currents and (currents[adjacent] >= CURRENT_CUTOFF) != above:
-            low, high = sorted((flow, adjacent))
+        pair = bracket()
+        if pair:
+            low, high = pair
             # A single below-threshold dip separated two hits in the slot A archive.
             # Check one step below the bracket when the budget allows it.
             lookback = low - 1
@@ -83,7 +110,9 @@ def search_current(probe, ceiling, slope, reference=None):
             return {"reason": "current_cutoff", "boundary_mm3_s": high, "recommended_mm3_s": high,
                     "boundary_median_abs_iq": currents[high],
                     "below_cutoff_mm3_s": low, "below_cutoff_median_abs_iq": currents[low]}
-        flow = adjacent
+        flow = next_flow()
+        if flow is None or len(currents) >= MAX_PROBES:
+            break
     return {"reason": "unbracketed_current"}
 
 
@@ -133,31 +162,37 @@ class MaxFlowRun:
     def run(self, preset):
         sweep = self.sweep
         name = f"maxflow_{uuid4().hex[:12]}"
-        expanded_abs = self.nozzle_mm == .6 and sweep.material == "ABS"
-        slope = ABS_06_SLOPE if expanded_abs else ESTIMATED_SLOPE[sweep.material]
-        reference = ABS_06_REFERENCE if expanded_abs else None
+        model = FlowModel(sweep.folder / MODEL_FILE)
+        prior = model.predict(sweep.material, self.nozzle_mm, sweep.temperature)
         report = {
             "slot": f"1{sweep.slot}", "material": sweep.material, "nozzle_mm": self.nozzle_mm,
             "temperature_c": sweep.temperature, "preset_mm3_s": preset,
             "start_mm3_s": START_FLOW, "planned_min_mm3_s": MIN_FLOW,
             "planned_max_mm3_s": self.ceiling, "tested_through_mm3_s": 0,
             "algorithm": "servo_current_threshold", "search": "adaptive", "step_seconds": STEP_SECONDS,
-            "measurement_seconds": 8, "estimated_iq_per_mm3_s": slope, "max_probes": MAX_PROBES,
+            "measurement_seconds": 8, "max_probes": MAX_PROBES,
             "current_cutoff": CURRENT_CUTOFF, "boundary_mm3_s": None, "recommended_mm3_s": None,
             "steps": [], "capture": f"{name}_summary.json",
         }
-        if reference:
-            report.update(reference_mm3_s=reference[0], reference_iq_per_mm3_s=reference[1])
+        if prior:
+            report["prediction"] = {"source": "model", "intercept": prior[0], "iq_per_mm3_s": prior[1],
+                                    "cutoff_mm3_s": cutoff(*prior)}
+        else:
+            report["prediction"] = {"source": "two_point"}
+
+        measured = []
 
         def probe(flow):
-            return self.probe(report, f"{name}_{len(report['steps']) + 1}", flow)
+            iq = self.probe(report, f"{name}_{len(measured) + 1}", flow)
+            measured.append((flow, iq))
+            return iq
 
         try:
             self.update("Lowering the bed and moving the nozzle to the center. Keep the build area clear.")
             move_to_flow_position(sweep)
             sweep.check_cancel()
             sweep.send("SET_PRESSURE_ADVANCE ADVANCE=0", "M400")
-            report.update(search_current(probe, self.ceiling, slope, reference))
+            report.update(search_current(probe, self.ceiling, prior))
         except UnusableCurrent as exc:
             report.update(reason="unusable_current", unusable_flow_mm3_s=exc.flow)
         except Exception as exc:
@@ -165,4 +200,9 @@ class MaxFlowRun:
             raise
         finally:
             (sweep.folder / report["capture"]).write_text(json.dumps(report, indent=2), encoding="utf-8")
+        if report["reason"] in ("current_cutoff", "unbracketed_current", "current_below_threshold"):
+            line = model.add_run(sweep.material, self.nozzle_mm, sweep.temperature, measured)
+            if line:
+                report["measured_line"] = {"intercept": line[0], "iq_per_mm3_s": line[1]}
+                (sweep.folder / report["capture"]).write_text(json.dumps(report, indent=2), encoding="utf-8")
         return report

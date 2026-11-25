@@ -165,7 +165,7 @@ def calibration_profile(preset, edited):
         return scalar(preset.config_value(key))
 
     material = value("filament_type")
-    temperature = int(value("nozzle_temperature"))
+    temperature = round(float(value("nozzle_temperature")))
     diameter = float(value("filament_diameter"))
     current_flow = float(value("filament_max_volumetric_speed"))
     if material not in ("PETG", "ABS"):
