@@ -145,24 +145,35 @@ class MaxFlowTest(unittest.TestCase):
             self.assertEqual(sweep.read.call_count, 2)
             prepare.assert_called_once_with(sweep, state, recover_unassigned=True)
 
-    def test_combined_run_uses_measured_pa_peak_instead_of_preset(self):
-        payload = {**PAYLOAD, "slot": "1C", "kind": "flow_then_pa", "nozzle_mm": .6, "outer_wall_flow_mm3_s": 25.0,
-                   "inner_wall_flow_mm3_s": 20.0}
+    @staticmethod
+    def combined_payload():
+        return {**PAYLOAD, "slot": "1C", "kind": "flow_then_pa", "nozzle_mm": .6, "temperature_c": 250,
+                "pa_seed": .045, "layer_height_mm": .2, "first_layer_height_mm": .25,
+                "bed_temperature_c": 90, "chamber_temperature_c": 0,
+                "walls": {"outer": {"flow": 25.0, "speed": 200, "acceleration": 2500},
+                          "inner": {"flow": 40.0, "speed": 300, "acceleration": 6000}}}
+
+    def test_combined_run_caps_adaptive_walls_at_the_measured_max_flow(self):
+        payload = self.combined_payload()
         check_request(payload, PAYLOAD["printer"])
-        for measured in (18, 23, 33, 48):
+        for measured, outer, inner in ((18, 18, 18), (30, 25, 30), (48, 25, 40)):
             max_flow = {"recommended_mm3_s": measured}
-            pa = {"candidate": .057}
-            with patch("orca_auto_pa.run_calibration", side_effect=[max_flow, pa]) as run:
+            adaptive = {"candidate": None, "points": [], "complete_grid": True}
+            with patch("orca_auto_pa.run_calibration", side_effect=[max_flow, adaptive]) as run:
                 result = run_job(PAYLOAD["printer"], Path.cwd(), payload, threading.Event(), Mock())
-            self.assertEqual([call.args[2]["kind"] for call in run.call_args_list], ["max_flow", "pressure_advance"])
+            self.assertEqual([call.args[2]["kind"] for call in run.call_args_list], ["max_flow", "adaptive_pa"])
             self.assertTrue(all(call.args[2]["slot"] == "1C" for call in run.call_args_list))
-            self.assertTrue(all(call.args[2]["nozzle_mm"] == .6 for call in run.call_args_list))
-            self.assertEqual(run.call_args.args[2]["max_flow_mm3_s"], measured)
-            self.assertEqual(run.call_args.args[2]["lower_flow_mm3_s"], min(20.0, measured))
-            self.assertEqual(check_request(run.call_args.args[2], PAYLOAD["printer"]), ("C", "ABS"))
-            self.assertEqual(result["pa_peak_mm3_s"], measured)
+            self.assertTrue(all(call.args[2]["temperature_c"] == 250 for call in run.call_args_list))
+            second = run.call_args.args[2]
+            self.assertEqual(second["max_flow_mm3_s"], measured)
+            self.assertEqual((second["walls"]["outer"]["flow"], second["walls"]["inner"]["flow"]), (outer, inner))
+            for wall in ("outer", "inner"):
+                speed = payload["walls"][wall]["speed"] * second["walls"][wall]["flow"] / payload["walls"][wall]["flow"]
+                self.assertAlmostEqual(second["walls"][wall]["speed"], speed)
+            self.assertEqual(check_request(second, PAYLOAD["printer"]), ("C", "ABS"))
             self.assertEqual(result["max_flow"], max_flow)
-            self.assertEqual(result["pressure_advance"], pa)
+            self.assertEqual(result["adaptive_pa"], adaptive)
+            self.assertEqual(result["pa_state"], "complete")
 
     def test_06_abs_requires_expanded_firmware_before_flow(self):
         payload = {**PAYLOAD, "nozzle_mm": .6}
@@ -182,11 +193,11 @@ class MaxFlowTest(unittest.TestCase):
         self.assertEqual(check_request({**payload, "lower_flow_mm3_s": 32}, PAYLOAD["printer"]), ("C", "ABS"))
         with self.assertRaisesRegex(ValueError, "40 mm"):
             check_request({**payload, "max_flow_mm3_s": 41}, PAYLOAD["printer"])
-        with self.assertRaisesRegex(ValueError, "24 mm"):
+        with self.assertRaisesRegex(ValueError, "30 mm"):
             check_request({**payload, "material": "PETG", "temperature_c": 230}, PAYLOAD["printer"])
 
     def test_combined_run_skips_pa_without_cutoff_and_keeps_result_on_pa_error(self):
-        payload = {**PAYLOAD, "kind": "flow_then_pa", "outer_wall_flow_mm3_s": 30.0}
+        payload = self.combined_payload()
         with patch("orca_auto_pa.run_calibration", return_value={"recommended_mm3_s": None}) as run:
             result = run_job(PAYLOAD["printer"], Path.cwd(), payload, threading.Event(), Mock())
         run.assert_called_once()
@@ -194,7 +205,7 @@ class MaxFlowTest(unittest.TestCase):
         max_flow = {"recommended_mm3_s": 23}
         with patch("orca_auto_pa.run_calibration", side_effect=[max_flow, RuntimeError("PA fault")]) as run:
             result = run_job(PAYLOAD["printer"], Path.cwd(), payload, threading.Event(), Mock())
-        self.assertEqual(run.call_args.args[2]["lower_flow_mm3_s"], 11.5)
+        self.assertEqual(run.call_args.args[2]["kind"], "adaptive_pa")
         self.assertEqual(result["pa_state"], "failed")
         self.assertEqual(result["max_flow"], max_flow)
 

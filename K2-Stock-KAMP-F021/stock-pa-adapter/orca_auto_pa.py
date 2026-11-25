@@ -18,7 +18,7 @@ from run_short_pa_sweep import MATERIAL_CODES, MOTION, PROFILES, SENSOR, Sweep, 
 
 PA_PEAK_LIMIT = 24
 EXTENDED_PA_SUPPORT = "measured Max Flow peak"  # Capability advertised by the installed adapter.
-PA_TEMPERATURES = {"PETG": (230, 240), "ABS": (280,)}
+NOZZLE_RANGE_C = (150, 300)  # Hardware sanity bounds. Orca enforces the filament preset range.
 SUPPORTED_NOZZLES_MM = (0.4, 0.6)
 
 
@@ -27,9 +27,18 @@ class Cancelled(RuntimeError):
 
 
 def pa_peak_limit(slot, material, temperature, nozzle_mm):
-    if temperature == PROFILES[material][1]:
-        return probe_ceiling(slot, material, nozzle_mm)
-    return PA_PEAK_LIMIT
+    return probe_ceiling(slot, material, nozzle_mm)
+
+
+def cap_walls(walls, flow):
+    capped = {}
+    for wall, settings in walls.items():
+        settings = dict(settings)
+        if settings["flow"] > flow:
+            settings["speed"] = settings["speed"] * flow / settings["flow"]
+            settings["flow"] = flow
+        capped[wall] = settings
+    return capped
 
 
 def check_request(payload, printer_host):
@@ -45,12 +54,12 @@ def check_request(payload, printer_host):
     direct = reader == "continuous"
     if reader is not None and (not direct or mode != "pressure_advance"):
         raise ValueError("Unknown pressure advance reader.")
-    temperatures = PA_TEMPERATURES[material] if direct or mode == "adaptive_pa" else (PROFILES[material][1],)
     if payload.get("nozzle_mm") not in SUPPORTED_NOZZLES_MM:
         sizes = " or ".join(f"{size:g}" for size in SUPPORTED_NOZZLES_MM)
         raise ValueError(f"Select a supported nozzle diameter in Orca ({sizes} mm).")
-    if payload.get("temperature_c") not in temperatures:
-        raise ValueError("Use a supported nozzle temperature for this material.")
+    temperature = payload.get("temperature_c")
+    if type(temperature) is not int or not NOZZLE_RANGE_C[0] <= temperature <= NOZZLE_RANGE_C[1]:
+        raise ValueError("Use a nozzle temperature from %d to %d °C." % NOZZLE_RANGE_C)
     if direct or mode in ("max_flow", "flow_then_pa", "adaptive_pa") or any(key in payload for key in
                                 ("max_flow_mm3_s", "filament_diameter_mm", "lower_flow_mm3_s")):
         values = (payload.get("max_flow_mm3_s"), payload.get("filament_diameter_mm"))
@@ -63,20 +72,13 @@ def check_request(payload, printer_host):
                 or not math.isfinite(lower_flow) or not 0 < lower_flow <= peak
                 or (not direct and lower_flow == peak)):
             raise ValueError("Use positive PA flows in ascending order. Only the continuous reader can use equal peaks.")
-    if mode == "flow_then_pa":
-        for wall in ("outer", "inner"):
-            key = f"{wall}_wall_flow_mm3_s"
-            if wall == "inner" and key not in payload:
-                continue  # Older clients only send the outer wall.
-            flow = payload.get(key)
-            if type(flow) not in (int, float) or not math.isfinite(flow) or flow < 0:
-                raise ValueError(f"Set a valid {wall}-wall flow target for the combined calibration.")
     if direct:
         limit = pa_peak_limit(slot[1], material, payload["temperature_c"], payload["nozzle_mm"])
         if payload["max_flow_mm3_s"] > limit:
             raise ValueError(f"Continuous Auto PA supports a peak at or below {limit:g} mm³/s.")
-    if mode == "adaptive_pa":
-        wall_grid(payload, pa_peak_limit(slot[1], material, payload["temperature_c"], payload["nozzle_mm"]))
+    if mode in ("adaptive_pa", "flow_then_pa"):
+        limit = pa_peak_limit(slot[1], material, payload["temperature_c"], payload["nozzle_mm"])
+        wall_grid({**payload, "max_flow_mm3_s": limit} if mode == "flow_then_pa" else payload, limit)
         validate_coupon(payload)
     return slot[1], material
 
@@ -151,8 +153,7 @@ def run_calibration(host, output, request, cancel, update):
     stamp = time.strftime("%H%M%S")
     sweep = Sweep(host, output, stamp, slot, material, check_cancel)
     flow_run = None
-    if direct or adaptive:
-        sweep.temperature = int(request["temperature_c"])
+    sweep.temperature = int(request["temperature_c"])
     state = sweep.status()
     ext = state["extruder"]
     require_nozzle(state, nozzle_mm)
@@ -342,34 +343,28 @@ def run_job(host, output, request, cancel, update):
     update("Step 1 of 2. Measuring max flow.")
     flow_request = {**request, "kind": "max_flow"}
     flow = run_calibration(host, output, flow_request, cancel, lambda text: update("Max Flow · " + text))
-    result = {"max_flow": flow, "pressure_advance": None, "pa_state": "skipped",
-              "pa_message": "Auto PA was skipped because Max Flow found no verified cutoff."}
+    result = {"max_flow": flow, "adaptive_pa": None, "pa_state": "skipped",
+              "pa_message": "Adaptive PA was skipped because Max Flow found no verified cutoff."}
     measured = flow.get("recommended_mm3_s")
     if measured is None:
         return result
 
-    peak = measured
-    outer = request["outer_wall_flow_mm3_s"]
-    if "inner_wall_flow_mm3_s" in request:
-        lower = min(outer or peak, request["inner_wall_flow_mm3_s"] or peak, peak)
-    else:
-        lower = outer if 0 < outer < peak else peak * .5
-    pa_request = {**request, "kind": "pressure_advance", "reader": "continuous",
-                  "max_flow_mm3_s": peak, "lower_flow_mm3_s": lower}
-    result.update(pa_peak_mm3_s=peak, pa_lower_mm3_s=lower)
+    walls = cap_walls(request["walls"], measured)
+    adaptive_request = {**request, "kind": "adaptive_pa", "max_flow_mm3_s": measured, "walls": walls}
+    result["walls"] = walls
     if cancel.is_set():
-        result.update(pa_state="canceled", pa_message="Auto PA was canceled before starting.")
+        result.update(pa_state="canceled", pa_message="Adaptive PA was canceled before starting.")
         return result
 
-    update(f"Step 2 of 2. Measuring Auto PA at {lower:.4g} and {peak:.4g} mm³/s.")
+    update(f"Step 2 of 2. Measuring Adaptive PA with wall flow capped at {measured:.4g} mm³/s.")
     try:
-        pa = run_calibration(host, output, pa_request, cancel, lambda text: update("Auto PA · " + text))
+        adaptive = run_calibration(host, output, adaptive_request, cancel, lambda text: update("Adaptive PA · " + text))
     except Cancelled as error:
         result.update(pa_state="canceled", pa_message=str(error))
     except Exception as error:
         result.update(pa_state="failed", pa_message=str(error))
     else:
-        result.update(pressure_advance=pa, pa_state="complete", pa_message="")
+        result.update(adaptive_pa=adaptive, pa_state="complete", pa_message="")
     return result
 
 
@@ -390,11 +385,9 @@ def calibration_setup(host, output):
         material = materials.get(unit["material_type"][index])
         if material is None:
             continue
+        limit = pa_peak_limit(letter, material, None, nozzle_mm)
         slots.append({"slot": address, "material": material, "loaded": unit["filament"] == letter,
-                      "max_flow": True, "pa_peak_limits_mm3_s": {
-                          str(temperature): pa_peak_limit(letter, material, temperature, nozzle_mm)
-                          for temperature in PA_TEMPERATURES[material]
-                      }})
+                      "max_flow": True, "pa_peak_limit_mm3_s": limit})
     return {"slots": slots, "nozzle_mm": nozzle_mm}
 
 
@@ -499,6 +492,8 @@ class Handler(BaseHTTPRequestHandler):
                              "adaptive_pa": True,
                              "printed_adaptive_pa": True,
                              "adaptive_pa_profile_preheat": True,
+                             "profile_temperature_range": True,
+                             "max_flow_then_adaptive_pa": True,
                              "supported_nozzles_mm": SUPPORTED_NOZZLES_MM,
                              "pa_peak_limit_mm3_s": PA_PEAK_LIMIT})
             return

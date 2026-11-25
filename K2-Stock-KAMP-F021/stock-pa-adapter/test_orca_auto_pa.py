@@ -329,8 +329,11 @@ class HelperTest(unittest.TestCase):
         self.assertEqual(check_request({**PAYLOAD, "slot": "1B", "material": "PETG", "temperature_c": 240},
                                        PRINTER), ("B", "PETG"))
         self.assertEqual(check_request({**PAYLOAD, "nozzle_mm": .6}, PRINTER), ("D", "ABS"))
+        self.assertEqual(check_request({**PAYLOAD, "temperature_c": 250}, PRINTER), ("D", "ABS"))
+        self.assertEqual(check_request({**PAYLOAD, "slot": "1B", "material": "PETG", "temperature_c": 255}, PRINTER),
+                         ("B", "PETG"))
         for change in ({"printer": "different"}, {"slot": "2D"}, {"material": "PLA"},
-                       {"temperature_c": 250}, {"nozzle_mm": 0.2}, {"nozzle_mm": "0.6"}, {"max_flow_mm3_s": 0},
+                       {"temperature_c": 400}, {"temperature_c": 100}, {"temperature_c": "250"}, {"nozzle_mm": 0.2}, {"nozzle_mm": "0.6"}, {"max_flow_mm3_s": 0},
                        {"max_flow_mm3_s": 20}, {"filament_diameter_mm": 1.75}):
             with self.subTest(change=change), self.assertRaises(ValueError):
                 check_request({**PAYLOAD, **change}, PRINTER)
@@ -580,6 +583,8 @@ class HelperTest(unittest.TestCase):
                                       "adaptive_pa": True,
                                       "printed_adaptive_pa": True,
                                       "adaptive_pa_profile_preheat": True,
+                                      "profile_temperature_range": True,
+                                      "max_flow_then_adaptive_pa": True,
                                   "supported_nozzles_mm": [.4, .6],
                                   "pa_peak_limit_mm3_s": 24})
                     first = request(base, "POST", PAYLOAD)

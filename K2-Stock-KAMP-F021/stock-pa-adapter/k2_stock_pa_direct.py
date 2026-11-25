@@ -26,6 +26,7 @@ SENT = re.compile(r"^Sent \d+ (.+)$")
 STROKE_PROFILES = {"PETG": ("000003", (230, 240)), "ABS": ("000004", (280,))}
 # Creality's own ABS reports 007001 while the generic ABS reports 000004. Both use the ABS profile.
 EQUIVALENT_CODES = {"000004": ("000004", "007001")}
+NOZZLE_RANGE_C = (150, 300)  # Hardware sanity bounds. Orca enforces the filament preset range.
 PA_STROKE_LIMIT = 24.
 MAX_TEST_FLOW = 32
 SUSTAIN_SECONDS = 120
@@ -329,21 +330,21 @@ class StockDirectPressure:
             raise gcmd.error("Select a slot in CFS unit 1 and ABS or PETG.")
         material_code, temperatures = STROKE_PROFILES[material]
         target = gcmd.get_int("TEMPERATURE", temperatures[-1])
-        if target not in temperatures:
-            raise gcmd.error("The requested nozzle temperature is outside the verified range for this material.")
+        if not NOZZLE_RANGE_C[0] <= target <= NOZZLE_RANGE_C[1]:
+            raise gcmd.error("Use a nozzle temperature from %d to %d C." % NOZZLE_RANGE_C)
         diameter = gcmd.get_float("DIAMETER", 1.75, above=0.)
         if not math.isfinite(diameter):
             raise gcmd.error("Set a positive filament diameter.")
         return slot, material_code, target, diameter
 
     def probe_ceiling(self, slot, material, target):
-        if (material, target) == ("000004", 280):
+        if material == "000004":
             toolhead = self.printer.lookup_object("toolhead")
             extruder = toolhead.get_extruder().get_status(self.reactor.monotonic())
             if math.isclose(extruder.get("nozzle_diameter", 0), .6, rel_tol=0, abs_tol=1e-6):
                 return ABS_06_CEILING
         reference_slot = "D" if material == STROKE_PROFILES["ABS"][0] else ("C" if slot == "C" else "A")
-        flows = MAP_FLOWS.get((reference_slot, material, target))
+        flows = next((rows for (ref, code, _), rows in MAP_FLOWS.items() if (ref, code) == (reference_slot, material)), None)
         return flows[-1] if flows else None
 
     def cmd_STROKE(self, gcmd):
