@@ -199,7 +199,8 @@ def capture_flow_map(sweep, name, seconds, diameter):
     try:
         sweep.send("SET_PRESSURE_ADVANCE ADVANCE=0", "G4 P3000", "M400",
                    f"STOCK_PA_DIRECT_MAP NAME={name} SLOT={sweep.slot} MATERIAL={sweep.material}"
-                   f" TEMPERATURE={sweep.temperature} DIAMETER={diameter:.8f} SECONDS={seconds}", timeout=540)
+                   f" TEMPERATURE={sweep.temperature} DIAMETER={diameter:.8f} SECONDS={seconds}"
+                   f" FLOWS={','.join(str(flow) for flow in MAP_FLOWS[sweep.slot])}", timeout=540)
     except TimeoutError:
         print("The command response timed out. Checking for the capture saved by Klipper.", flush=True)
     data = sweep.read(f"/server/files/config/{filename}", timeout=45)
@@ -247,7 +248,8 @@ def run(sweep, name, seconds=120):
             try:
                 sweep.send("SET_PRESSURE_ADVANCE ADVANCE=0", "G4 P3000", "M400",
                            f"{command} NAME={name} SLOT={sweep.slot} MATERIAL={sweep.material}"
-                           f" TEMPERATURE={sweep.temperature} DIAMETER=1.75", timeout=540)
+                           f" TEMPERATURE={sweep.temperature} DIAMETER=1.75"
+                           f" FLOWS={','.join(str(flow) for flow in flows)} SECONDS=60 REST=10", timeout=540)
             except TimeoutError:
                 print("The command response timed out. Checking for the capture saved by Klipper.", flush=True)
             data = sweep.read(f"/server/files/config/{filename}", timeout=45)

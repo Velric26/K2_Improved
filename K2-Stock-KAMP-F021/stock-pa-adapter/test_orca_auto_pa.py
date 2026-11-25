@@ -493,7 +493,8 @@ class HelperTest(unittest.TestCase):
 
         def read(route, body=None):
             if route == "/printer/gcode/help":
-                return {"result": {"STOCK_PA_DIRECT_PA_STROKE": "", "STOCK_PA_CAPTURE": ""}}
+                return {"result": {"STOCK_PA_DIRECT_PA_STROKE": "", "STOCK_PA_CAPTURE": "",
+                                   "STOCK_PA_DIRECT_STROKE": "bounded stroke (host-defined limits)"}}
             if route == "/printer/objects/query?configfile=settings":
                 extruder = {"filament_diameter": 1.75, "max_extrude_cross_section": 100}
                 return {"result": {"status": {"configfile": {"settings": {"extruder": extruder}}}}}

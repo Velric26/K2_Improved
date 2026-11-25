@@ -18,6 +18,10 @@ python -m venv .\K2-Orca-CFS\.venv
 
 The launcher installs **K2 Calibration** into the Orca data directory and starts the local companion at `127.0.0.1:8766`. It connects to the printer’s Moonraker API on port **7125**. The printer address must match the host configured in Orca. Activate the plugin in Orca, then open **Auto Calibrations** from Speed Dial. See the [calibration guide](docs/K2-STOCK-AUTO-CALIBRATION.md) for supported spools and how to save results.
 
+To start the companion automatically, run `.\K2-Orca-CFS\Install-K2-Companion-Autostart.ps1 -PrinterAddress 192.0.2.10` once. It stores the address and registers a logon task that restarts the companion within 15 minutes if it stops. Run it again with `-Uninstall` to remove it.
+
+Calibration constants (material codes, flow ceilings and test plans) live only in the PC companion. The printer adapter checks hardware bounds: the 150–300 °C nozzle range and the live extruder limits.
+
 To run the archived-run replay and companion tests offline, use the repository’s adapter folder.
 
 ```powershell

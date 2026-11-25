@@ -73,7 +73,8 @@ if ($health.printer -ne $PrinterAddress) {
     throw 'The running companion points to a different printer. Close it before launching for this address.'
 }
 if (!$health.combined_calibration -or !$health.standalone_pa_outer_wall_only -or
-    !$health.printed_adaptive_pa -or !$health.adaptive_pa_profile_preheat -or !$health.supported_nozzles_mm) {
+    !$health.printed_adaptive_pa -or !$health.adaptive_pa_profile_preheat -or !$health.supported_nozzles_mm -or
+    !$health.profile_temperature_range -or !$health.max_flow_then_adaptive_pa) {
     throw 'The running K2 companion predates the plugin. Restart it and run this launcher again.'
 }
 

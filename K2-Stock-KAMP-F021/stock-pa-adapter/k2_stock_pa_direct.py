@@ -23,28 +23,13 @@ ACK = "ack_prtouch oid=%c err=%c expar0=%u expar1=%u"
 PRESSURE = "resault_prtouch_pres"
 GAP_SECONDS = .012
 SENT = re.compile(r"^Sent \d+ (.+)$")
-STROKE_PROFILES = {"PETG": ("000003", (230, 240)), "ABS": ("000004", (280,))}
-# Creality's own ABS reports 007001 while the generic ABS reports 000004. Both use the ABS profile.
-EQUIVALENT_CODES = {"000004": ("000004", "007001")}
-NOZZLE_RANGE_C = (150, 300)  # Hardware sanity bounds. Orca enforces the filament preset range.
-PA_STROKE_LIMIT = 24.
-MAX_TEST_FLOW = 32
-SUSTAIN_SECONDS = 120
+# Calibration constants (materials, flow ceilings, test plans) live in the PC companion.
+# The printer side only enforces hardware bounds: nozzle range and the live extruder limits.
+HOST_LIMITS = "host-defined limits"
+NOZZLE_RANGE_C = (150, 300)
 BED_CENTER = 130.
-SERIES_FLOWS = (20, 30, 40)
-SERIES_SECONDS = 60
-SERIES_REST_SECONDS = 10
-MAP_FLOWS = {
-    ("D", "000004", 280): tuple(range(25, 41)),
-    ("C", "000003", 240): tuple(range(15, 31)),
-    ("B", "000003", 240): tuple(range(19, 30)),
-    ("A", "000003", 240): tuple(range(19, 30)),
-}
-MAP_SECONDS = 20
 CURRENT_PROBE_SECONDS = 16
 CURRENT_PROBE_MIN_FLOW = 8
-ABS_06_CEILING = 48
-ABS_06_SUPPORT = f"{ABS_06_CEILING} mm3/s for 0.6 mm ABS"
 STOCK_E_BRIDGE_OID = 1  # Observed in the F021 stock extruder protection replies.
 MOTOR_CURRENT_QUERY = bytes.fromhex("f7 81 04 00 08 08 c8")
 
@@ -170,7 +155,7 @@ class StockDirectPressure:
         self.gcode.register_command("STOCK_PA_DIRECT_TEST", self.cmd_TEST,
                                     desc="Benchmark the stock nozzle MCU pressure buffer with the printer stationary")
         self.gcode.register_command("STOCK_PA_DIRECT_STROKE", self.cmd_STROKE,
-                                    desc=f"Capture a bounded pressure stroke including a measured Max Flow peak ({ABS_06_SUPPORT})")
+                                    desc=f"Capture a bounded pressure stroke including a measured Max Flow peak ({HOST_LIMITS})")
         self.gcode.register_command("STOCK_PA_DIRECT_PA_STROKE", self.cmd_STROKE,
                                     desc="Capture a continuous pressure stroke for the selected CFS slot")
         self.gcode.register_command(COMMAND, self.cmd_WALL_STROKE, desc=CAPABILITY)
@@ -182,12 +167,12 @@ class StockDirectPressure:
         self.gcode.register_command("STOCK_PA_DIRECT_MOTOR_TEST", self.cmd_MOTOR_TEST,
                                     desc="Verify the stock extruder motor's read-only current telemetry")
         self.gcode.register_command("STOCK_PA_DIRECT_SERIES", self.cmd_SERIES,
-                                    desc="Capture 60-second ABS pulls at 20, 30 and 40 mm3/s with E current")
+                                    desc="Capture extrusion pulls at host-supplied FLOWS with rests and E current")
         self.gcode.register_command("STOCK_PA_DIRECT_MAP", self.cmd_MAP,
-                                    desc="Map pressure and E current for slot D ABS or slot A/B/C PETG with 16- or 20-second steps")
+                                    desc="Map pressure and E current at host-supplied FLOWS with 16- or 20-second steps")
         self.gcode.register_command("STOCK_PA_DIRECT_CURRENT_FLOW", self.cmd_CURRENT_FLOW,
                                     desc=("Measure servo current in all CFS slots during a 16-second flow step "
-                                          f"(minimum {CURRENT_PROBE_MIN_FLOW} mm3/s, {ABS_06_SUPPORT})"))
+                                          f"(minimum {CURRENT_PROBE_MIN_FLOW} mm3/s, {HOST_LIMITS})"))
 
     def check_idle(self, gcmd, nozzle_target=0, bed_target=0):
         stats = self.printer.lookup_object("print_stats")
@@ -324,38 +309,37 @@ class StockDirectPressure:
         self.benchmark(gcmd, 20, True, motor_current=True)
 
     def flow_profile(self, gcmd):
-        slot = gcmd.get("SLOT", "B")
-        material = gcmd.get("MATERIAL", "ABS" if slot == "D" else "PETG")
-        if slot not in ("A", "B", "C", "D") or material not in STROKE_PROFILES:
-            raise gcmd.error("Select a slot in CFS unit 1 and ABS or PETG.")
-        material_code, temperatures = STROKE_PROFILES[material]
-        target = gcmd.get_int("TEMPERATURE", temperatures[-1])
-        if not NOZZLE_RANGE_C[0] <= target <= NOZZLE_RANGE_C[1]:
-            raise gcmd.error("Use a nozzle temperature from %d to %d C." % NOZZLE_RANGE_C)
+        slot = gcmd.get("SLOT")
+        material = gcmd.get("MATERIAL", "")
+        if slot not in ("A", "B", "C", "D") or not re.fullmatch(r"[A-Za-z0-9_-]{0,16}", material):
+            raise gcmd.error("Select a slot in CFS unit 1.")
+        target = gcmd.get_int("TEMPERATURE", minval=NOZZLE_RANGE_C[0], maxval=NOZZLE_RANGE_C[1])
         diameter = gcmd.get_float("DIAMETER", 1.75, above=0.)
         if not math.isfinite(diameter):
             raise gcmd.error("Set a positive filament diameter.")
-        return slot, material_code, target, diameter
+        return slot, material, target, diameter
 
-    def probe_ceiling(self, slot, material, target):
-        if material == "000004":
-            toolhead = self.printer.lookup_object("toolhead")
-            extruder = toolhead.get_extruder().get_status(self.reactor.monotonic())
-            if math.isclose(extruder.get("nozzle_diameter", 0), .6, rel_tol=0, abs_tol=1e-6):
-                return ABS_06_CEILING
-        reference_slot = "D" if material == STROKE_PROFILES["ABS"][0] else ("C" if slot == "C" else "A")
-        flows = next((rows for (ref, code, _), rows in MAP_FLOWS.items() if (ref, code) == (reference_slot, material)), None)
-        return flows[-1] if flows else None
+    def flow_limit(self, diameter):
+        """Highest volumetric flow the live extrusion-only velocity limit allows."""
+        now = self.reactor.monotonic()
+        config = self.printer.lookup_object("configfile").get_status(now)["settings"]["extruder"]
+        return config["max_extrude_only_velocity"] * math.pi * (diameter / 2) ** 2
+
+    def get_flows(self, gcmd, diameter):
+        limit = self.flow_limit(diameter)
+        try:
+            flows = tuple(float(value) for value in gcmd.get("FLOWS").split(","))
+        except ValueError:
+            raise gcmd.error("FLOWS must be a comma-separated list of mm3/s values.")
+        if not 1 <= len(flows) <= 32 or any(not math.isfinite(f) or not 0 < f <= limit for f in flows):
+            raise gcmd.error("Each flow must be positive and within the extrusion-only limit (%.4g mm3/s)." % limit)
+        return flows
 
     def cmd_STROKE(self, gcmd):
         slot, material_code, target, diameter = self.flow_profile(gcmd)
-        measured = gcmd.get_int("MEASURED_FLOW", 0, minval=0, maxval=1)
-        limit = self.probe_ceiling(slot, material_code, target) if measured else PA_STROKE_LIMIT
-        if limit is None:
-            raise gcmd.error("Measured-flow PA requires the verified Max Flow material temperature.")
-        flow = gcmd.get_float("FLOW", 12., above=0., maxval=limit)
+        flow = gcmd.get_float("FLOW", 12., above=0., maxval=self.flow_limit(diameter))
         band = gcmd.get("BAND", None)
-        if not math.isfinite(flow) or (band is None and (measured or flow not in (12., 24.))):
+        if not math.isfinite(flow) or (band is None and flow not in (12., 24.)):
             raise gcmd.error("Specify BAND=LOWER or BAND=PEAK for a profile-based flow target.")
         if band is not None and band not in ("LOWER", "PEAK"):
             raise gcmd.error("BAND must be LOWER or PEAK.")
@@ -364,17 +348,16 @@ class StockDirectPressure:
         slow = peak * (.4 if lower else .55)
         feeds = (slow, peak, slow)
         segments = ((115.34, 24, .85), (115.94, 60, .60), (116.28, 24, .85))
-        if measured:
-            now = self.reactor.monotonic()
-            config = self.printer.lookup_object("configfile").get_status(now)["settings"]["extruder"]
-            actual_diameter = config["filament_diameter"]
-            area = math.pi * (actual_diameter / 2) ** 2
-            if not math.isclose(diameter, actual_diameter, rel_tol=.005) or any(
-                    speed > config["max_extrude_only_velocity"]
-                    or speed * duration > config["max_extrude_only_distance"]
-                    or speed * area / (velocity / 60) > config["max_extrude_cross_section"]
-                    for (_, velocity, duration), speed in zip(segments, feeds)):
-                raise gcmd.error("The measured-flow pressure stroke exceeds the firmware extrusion limits.")
+        now = self.reactor.monotonic()
+        config = self.printer.lookup_object("configfile").get_status(now)["settings"]["extruder"]
+        actual_diameter = config["filament_diameter"]
+        area = math.pi * (actual_diameter / 2) ** 2
+        if not math.isclose(diameter, actual_diameter, rel_tol=.005) or any(
+                speed > config["max_extrude_only_velocity"]
+                or speed * duration > config["max_extrude_only_distance"]
+                or speed * area / (velocity / 60) > config["max_extrude_cross_section"]
+                for (_, velocity, duration), speed in zip(segments, feeds)):
+            raise gcmd.error("The pressure stroke exceeds the firmware extrusion limits.")
 
         def stroke():
             self.check_purge_position(gcmd, slot, material_code, target)
@@ -394,8 +377,7 @@ class StockDirectPressure:
 
     def cmd_WALL_STROKE(self, gcmd):
         slot, material, target, diameter = self.flow_profile(gcmd)
-        limit = self.probe_ceiling(slot, material, target) or PA_STROKE_LIMIT
-        flow = gcmd.get_float("FLOW", above=0., maxval=limit)
+        flow = gcmd.get_float("FLOW", above=0., maxval=self.flow_limit(diameter))
         speed = gcmd.get_float("SPEED", above=0.)
         acceleration = gcmd.get_float("ACCEL", above=0.)
         now = self.reactor.monotonic()
@@ -455,8 +437,7 @@ class StockDirectPressure:
 
     def cmd_PRINT_WALL(self, gcmd):
         slot, material, target, diameter = self.flow_profile(gcmd)
-        limit = self.probe_ceiling(slot, material, target) or PA_STROKE_LIMIT
-        flow = gcmd.get_float("FLOW", above=0., maxval=limit)
+        flow = gcmd.get_float("FLOW", above=0., maxval=self.flow_limit(diameter))
         speed = gcmd.get_float("SPEED", above=0.)
         accel = gcmd.get_float("ACCEL", minval=MIN_ACCEL, maxval=MAX_ACCEL)
         corner = gcmd.get_float("CORNER", minval=0., maxval=25.)
@@ -520,7 +501,7 @@ class StockDirectPressure:
 
     def cmd_FLOW(self, gcmd):
         slot, material_code, target, diameter = self.flow_profile(gcmd)
-        flow = gcmd.get_int("FLOW", minval=5, maxval=MAX_TEST_FLOW)
+        flow = gcmd.get_int("FLOW", minval=5, maxval=int(self.flow_limit(diameter)))
         speed = flow / (math.pi * (diameter / 2) ** 2)
 
         def stroke():
@@ -540,13 +521,9 @@ class StockDirectPressure:
 
     def cmd_SUSTAIN(self, gcmd):
         slot, material_code, target, diameter = self.flow_profile(gcmd)
-        flow = gcmd.get_int("FLOW", MAX_TEST_FLOW)
-        seconds = gcmd.get_int("SECONDS", SUSTAIN_SECONDS)
-        if slot != "D" or material_code != STROKE_PROFILES["ABS"][0]:
-            raise gcmd.error("The sustained flow diagnostic uses the known ABS spool in slot D.")
-        if (seconds, flow) not in ((30, 20), (30, 32), (30, 40), (120, MAX_TEST_FLOW)):
-            raise gcmd.error("Choose 30 seconds at 20, 32, or 40 mm³/s, or 120 seconds at 32 mm³/s.")
-        segment_count = 2 if seconds == SUSTAIN_SECONDS else 1
+        flow = gcmd.get_int("FLOW", minval=1, maxval=int(self.flow_limit(diameter)))
+        seconds = gcmd.get_int("SECONDS", minval=10, maxval=120)
+        segment_count = 2 if seconds > 60 else 1
         speed = flow / (math.pi * (diameter / 2) ** 2)
         toolhead = self.printer.lookup_object("toolhead")
         extruder = toolhead.get_extruder()
@@ -583,26 +560,22 @@ class StockDirectPressure:
 
     def cmd_SERIES(self, gcmd):
         profile = self.flow_profile(gcmd)
-        if profile[:3] != ("D", STROKE_PROFILES["ABS"][0], 280):
-            raise gcmd.error("The three-flow series uses the known ABS spool in slot D.")
-        self.flow_series(gcmd, profile, SERIES_FLOWS, SERIES_SECONDS, SERIES_REST_SECONDS)
+        flows = self.get_flows(gcmd, profile[3])
+        seconds = gcmd.get_int("SECONDS", minval=10, maxval=120)
+        rest = gcmd.get_int("REST", 0, minval=0, maxval=60)
+        self.flow_series(gcmd, profile, flows, seconds, rest)
 
     def cmd_MAP(self, gcmd):
         profile = self.flow_profile(gcmd)
-        flows = MAP_FLOWS.get(profile[:3])
-        if flows is None:
-            raise gcmd.error("The map supports ABS in slot D at 280 °C or PETG in slot A, B, or C at 240 °C.")
-        seconds = gcmd.get_int("SECONDS", MAP_SECONDS)
-        if seconds not in (16, MAP_SECONDS):
+        flows = self.get_flows(gcmd, profile[3])
+        seconds = gcmd.get_int("SECONDS", 20)
+        if seconds not in (16, 20):
             raise gcmd.error("The continuous map supports 16- or 20-second steps.")
         self.flow_series(gcmd, profile, flows, seconds, 0)
 
     def cmd_CURRENT_FLOW(self, gcmd):
         slot, material, target, diameter = self.flow_profile(gcmd)
-        limit = self.probe_ceiling(slot, material, target)
-        if limit is None:
-            raise gcmd.error("Use PETG at 240 C or ABS at 280 C in CFS unit 1.")
-        flow = gcmd.get_int("FLOW", minval=CURRENT_PROBE_MIN_FLOW, maxval=limit)
+        flow = gcmd.get_int("FLOW", minval=CURRENT_PROBE_MIN_FLOW, maxval=int(self.flow_limit(diameter)))
         name = self.capture_name(gcmd)
         toolhead = self.printer.lookup_object("toolhead")
         toolhead.wait_moves()
@@ -719,9 +692,8 @@ class StockDirectPressure:
         if (toolhead.get_status(now)["homed_axes"] != "xyz" or abs(nozzle["temperature"] - target) > 5
                 or nozzle["target"] != target or box["state"] != "connect"
                 or box["map"][address] != address or box["T1"]["filament"] != slot
-                or box["T1"]["material_type"][index] not in EQUIVALENT_CODES.get(material_code, (material_code,))
                 or not filament["filament_detected"]):
-            raise gcmd.error("The extrusion stroke requires XYZ homed and the selected material from slot %s at %d °C."
+            raise gcmd.error("The extrusion stroke requires XYZ homed and filament loaded from slot %s at %d °C."
                              % (slot, target))
 
     @staticmethod

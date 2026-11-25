@@ -15,7 +15,8 @@ STEP_SECONDS = 16
 CURRENT_CUTOFF = 1.0
 MAX_PROBES = 8
 ABS_06_CEILING = 48
-ABS_06_SUPPORT = f"{ABS_06_CEILING} mm3/s for 0.6 mm ABS"
+# Capability text the printer adapter advertises once it takes its flow limits from this companion.
+HOST_LIMITS = "host-defined limits"
 # Approximate slopes around the threshold in the archived stock PETG and ABS sweeps.
 ESTIMATED_SLOPE = {"PETG": .05, "ABS": .04}
 # The 0.6 mm ABS trace rose by about .0225 per mm³/s over 15–39 and .06 near 39.

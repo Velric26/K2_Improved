@@ -3,6 +3,7 @@
 import argparse
 import json
 import math
+import sys
 import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -13,7 +14,7 @@ from uuid import uuid4
 from adaptive_pa_motion import PRINT_CAPABILITY as WALL_CAPABILITY, PRINT_COMMAND as WALL_COMMAND
 from run_adaptive_pa import chamber_target, grid as wall_grid, measure as measure_walls, validate_coupon
 from run_direct_pa_refinement import measure as measure_direct, rank as rank_direct
-from run_max_flow import ABS_06_SUPPORT, COMMAND as CURRENT_FLOW_COMMAND, MIN_FLOW, SLOT_SUPPORT, MaxFlowRun, probe_ceiling
+from run_max_flow import COMMAND as CURRENT_FLOW_COMMAND, HOST_LIMITS, MIN_FLOW, SLOT_SUPPORT, MaxFlowRun, probe_ceiling
 from run_short_pa_sweep import MATERIAL_CODES, MOTION, PROFILES, SENSOR, Sweep, limit_command, motion_limits, preset_flows, require_nozzle
 
 PA_PEAK_LIMIT = 24
@@ -28,6 +29,30 @@ class Cancelled(RuntimeError):
 
 def pa_peak_limit(slot, material, temperature, nozzle_mm):
     return probe_ceiling(slot, material, nozzle_mm)
+
+
+def unverified_cleanup(sweep, failure, bed_heated):
+    """Stop the run if the printer is not idle, keeping the original error and cutting heaters when safe."""
+    try:
+        state = sweep.status()
+    except Exception as error:
+        if failure is None:
+            raise
+        raise type(failure)(f"{failure} Cleanup could not reach the printer ({error}).") from failure
+    if sweep.idle(state):
+        return
+    heaters_off = False
+    if state["print_stats"]["state"] != "printing":
+        try:
+            sweep.send("M104 S0", *(("M140 S0",) if bed_heated else ()))
+            heaters_off = True
+        except Exception:
+            pass
+    message = "The printer state changed before cleanup could be verified."
+    message += " The heaters were switched off." if heaters_off else " Check the heaters on the printer."
+    if failure is not None:
+        message = f"{failure} {message}"
+    raise (Cancelled if isinstance(failure, Cancelled) else RuntimeError)(message) from failure
 
 
 def cap_walls(walls, flow):
@@ -180,12 +205,9 @@ def run_calibration(host, output, request, cancel, update):
             raise RuntimeError("Update the printer's Auto Max Flow adapter to enable below-threshold probes.")
         if find_max_flow and SLOT_SUPPORT not in commands[command]:
             raise RuntimeError("Update the printer's Auto Max Flow adapter for the current CFS slot support.")
-        legacy_ceiling = probe_ceiling(slot, material)
-        if probe_ceiling(slot, material, nozzle_mm) > legacy_ceiling:
-            if find_max_flow and ABS_06_SUPPORT not in commands[command]:
-                raise RuntimeError("Update the printer adapter before running 0.6 mm ABS Max Flow.")
-            if direct and max_flow > legacy_ceiling and ABS_06_SUPPORT not in commands.get("STOCK_PA_DIRECT_STROKE", ""):
-                raise RuntimeError("Update the printer adapter before using the higher 0.6 mm ABS PA flow.")
+        flow_command = commands[command] if find_max_flow else commands.get("STOCK_PA_DIRECT_STROKE", "")
+        if HOST_LIMITS not in flow_command:
+            raise RuntimeError("Update the printer adapter. Calibration limits now come from the PC companion.")
         if extended_stroke:
             stroke = commands.get("STOCK_PA_DIRECT_STROKE", "")
             if EXTENDED_PA_SUPPORT not in stroke:
@@ -272,8 +294,8 @@ def run_calibration(host, output, request, cancel, update):
                                lower_flow=lower_flow, nozzle_mm=nozzle_mm)
         check_cancel()
     finally:
-        if not sweep.idle(sweep.status()):
-            raise RuntimeError("The printer state changed before cleanup could be verified.")
+        failure = sys.exc_info()[1]
+        unverified_cleanup(sweep, failure, adaptive)
         cleanup = ["M104 S0"]
         restore_chamber = False
         if adaptive:

@@ -8,14 +8,15 @@ from pathlib import Path
 from unittest.mock import Mock, patch
 
 from orca_auto_pa import EXTENDED_PA_SUPPORT, check_request, run_calibration, run_job
-from run_max_flow import COMMAND, MAX_PROBES, MIN_FLOW, SLOT_SUPPORT, STEP_SECONDS, MaxFlowRun, probe_ceiling, search_current
+from run_max_flow import COMMAND, HOST_LIMITS, MAX_PROBES, MIN_FLOW, SLOT_SUPPORT, STEP_SECONDS, MaxFlowRun, probe_ceiling, search_current
 
 
 EXTRUDER = {"filament_diameter": 1.75, "max_extrude_only_velocity": 212.86,
             "max_extrude_only_distance": 1000}
 PAYLOAD = {"printer": "192.0.2.118", "slot": "1D", "material": "ABS", "temperature_c": 280,
            "nozzle_mm": .4, "kind": "max_flow", "max_flow_mm3_s": 31, "filament_diameter_mm": 1.75}
-COMMANDS = {COMMAND: f"Capture one step in {SLOT_SUPPORT} (minimum {MIN_FLOW} mm3/s)", "STOCK_PA_CAPTURE": ""}
+COMMANDS = {COMMAND: f"Capture one step in {SLOT_SUPPORT} (minimum {MIN_FLOW} mm3/s, {HOST_LIMITS})",
+            "STOCK_PA_CAPTURE": ""}
 
 
 def capture(flows, iq):
@@ -175,13 +176,14 @@ class MaxFlowTest(unittest.TestCase):
             self.assertEqual(result["adaptive_pa"], adaptive)
             self.assertEqual(result["pa_state"], "complete")
 
-    def test_06_abs_requires_expanded_firmware_before_flow(self):
+    def test_max_flow_requires_an_adapter_that_takes_limits_from_the_pc(self):
         payload = {**PAYLOAD, "nozzle_mm": .6}
         state = {"extruder": {"target": 0, "nozzle_diameter": .6}, "heater_bed": {"target": 0}}
+        old_adapter = {COMMAND: f"Capture one step in {SLOT_SUPPORT} (minimum {MIN_FLOW} mm3/s)", "STOCK_PA_CAPTURE": ""}
         with patch("orca_auto_pa.Sweep") as factory:
             sweep = factory.return_value
             sweep.status.return_value = state
-            sweep.read.return_value = {"result": COMMANDS}
+            sweep.read.return_value = {"result": old_adapter}
             with self.assertRaisesRegex(RuntimeError, "Update the printer adapter"):
                 run_calibration(f"http://{PAYLOAD['printer']}:7125", Path.cwd(), payload, threading.Event(), Mock())
             sweep.send.assert_not_called()
@@ -214,7 +216,7 @@ class MaxFlowTest(unittest.TestCase):
                    "max_flow_mm3_s": 33, "lower_flow_mm3_s": 15}
         host = f"http://{payload['printer']}:7125"
         state = {"extruder": {"target": 0, "nozzle_diameter": .4}, "heater_bed": {"target": 0}}
-        commands = {"STOCK_PA_DIRECT_PA_STROKE": "", "STOCK_PA_CAPTURE": ""}
+        commands = {"STOCK_PA_DIRECT_PA_STROKE": "", "STOCK_PA_CAPTURE": "", "STOCK_PA_DIRECT_STROKE": HOST_LIMITS}
         with patch("orca_auto_pa.Sweep") as factory, patch("orca_auto_pa.motion_limits"):
             sweep = factory.return_value
             sweep.status.return_value = state
@@ -224,7 +226,7 @@ class MaxFlowTest(unittest.TestCase):
 
             extruder = {**EXTRUDER, "max_extrude_cross_section": 100, "max_extrude_only_velocity": 10}
             settings = {"result": {"status": {"configfile": {"settings": {"extruder": extruder}}}}}
-            commands["STOCK_PA_DIRECT_STROKE"] = EXTENDED_PA_SUPPORT
+            commands["STOCK_PA_DIRECT_STROKE"] = f"{EXTENDED_PA_SUPPORT} ({HOST_LIMITS})"
             sweep.read.side_effect = [{"result": commands}, settings]
             with self.assertRaisesRegex(RuntimeError, "extrusion-only limits"):
                 run_calibration(host, Path.cwd(), payload, threading.Event(), Mock())

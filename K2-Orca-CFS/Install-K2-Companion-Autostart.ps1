@@ -34,6 +34,10 @@ $arguments = '-NoProfile -WindowStyle Hidden -ExecutionPolicy RemoteSigned -File
 $action = New-ScheduledTaskAction -Execute (Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe') -Argument $arguments
 $user = [System.Security.Principal.WindowsIdentity]::GetCurrent().Name
 $trigger = New-ScheduledTaskTrigger -AtLogOn -User $user
+# Re-run every 15 minutes. The launcher exits at once when the companion is healthy,
+# so this only restarts a companion that crashed or was closed.
+$trigger.Repetition = (New-ScheduledTaskTrigger -Once -At (Get-Date) `
+    -RepetitionInterval (New-TimeSpan -Minutes 15)).Repetition
 $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries `
     -StartWhenAvailable -RestartCount 5 -RestartInterval (New-TimeSpan -Minutes 1) `
     -ExecutionTimeLimit (New-TimeSpan -Minutes 5)
@@ -43,4 +47,4 @@ Register-ScheduledTask -TaskName $TaskName -Action $action -Trigger $trigger -Se
     -Principal $principal -Description 'Starts the K2 Auto PA companion for OrcaSlicer at logon.' -Force | Out-Null
 
 Write-Output "K2_PRINTER_ADDRESS=$PrinterAddress (user environment)."
-Write-Output "Scheduled task '$TaskName' will start the companion at every logon."
+Write-Output "Scheduled task '$TaskName' starts the companion at logon and restarts it within 15 minutes if it stops."
