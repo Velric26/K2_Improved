@@ -26,6 +26,8 @@ MAX_CAPTURE_ATTEMPTS = 6
 CALIBRATION_LIMITS = (500., 100.)
 CALIBRATION_SMOOTH = .040
 PROFILES = {"PETG": ("000003", 240, 50), "ABS": ("000004", 280, 57)}
+# Creality's own ABS reports 007001 while the generic ABS reports 000004. Both use the ABS profile.
+MATERIAL_CODES = {"PETG": ("000003",), "ABS": ("000004", "007001")}
 SLOT_MATERIALS = {"A": "PETG", "D": "ABS"}
 BASE_FEED = (2.0, 5.0, 2.0)
 MOTION = ((115.34, 24, .85), (115.94, 60, .60), (116.28, 24, .85))
@@ -39,6 +41,13 @@ def motion_limits(state):
 def limit_command(limits):
     accel, accel_to_decel = limits
     return f"SET_VELOCITY_LIMIT ACCEL={accel:.12g} ACCEL_TO_DECEL={accel_to_decel:.12g}"
+
+
+def require_nozzle(status, expected):
+    reported = status["extruder"]["nozzle_diameter"]
+    if not math.isclose(reported, expected, rel_tol=0, abs_tol=1e-6):
+        raise RuntimeError(f"Orca selected {expected:g} mm, but the K2 reports {reported:g} mm. "
+                           "Set the same nozzle diameter on the K2 and in Orca.")
 
 
 def timing_candidate(rows, best):
@@ -141,7 +150,7 @@ class Sweep:
         slot_address = f"T1{self.slot}"
         index = "ABCD".index(self.slot)
         if (box["state"] != "connect" or box["map"][slot_address] != slot_address
-                or box["T1"]["material_type"][index] != self.material_code):
+                or box["T1"]["material_type"][index] not in MATERIAL_CODES[self.material]):
             raise RuntimeError(f"Expected {self.material} in connected CFS slot 1{self.slot}.")
 
     def check_filament(self, state):
@@ -291,13 +300,14 @@ class Sweep:
                 "median_rms": {f"{k/1000:.3f}": round(rms, 4) for k, rms in self.rank()},
                 "rejected_captures": sum(row is None for rows in self.results.values() for row in rows)}
 
-    def run(self, preheated=False, max_flow=None, diameter=1.75, update=print, lower_flow=None):
+    def run(self, preheated=False, max_flow=None, diameter=1.75, update=print, lower_flow=None, *, nozzle_mm=.4):
         state = self.status()
         ext = state["extruder"]
         expected_target = self.temperature if preheated else 0
-        if (not self.idle(state) or ext["nozzle_diameter"] != .4 or ext["target"] != expected_target
+        require_nozzle(state, nozzle_mm)
+        if (not self.idle(state) or ext["target"] != expected_target
                 or state["heater_bed"]["target"] != 0 or not state["k2_stock_pa_capture"]):
-            raise RuntimeError("The printer, heaters or 0.4 mm nozzle are not in the expected calibration state.")
+            raise RuntimeError("The printer or heaters are not in the expected calibration state.")
         self.check_filament(state)
         self.check_position(state)
         pa, smooth = ext["pressure_advance"], ext["smooth_time"]
@@ -325,7 +335,7 @@ class Sweep:
                                dict(peak, peak_mm3_s=max_flow)]
                 assessment = combine_flows(normal["assessment"], peak["assessment"], flow_sweeps)
             candidate = assessment["best_pa"] if assessment["reason"] == "accepted" else None
-            result = {"candidate": candidate, "assessment": assessment,
+            result = {"candidate": candidate, "assessment": assessment, "nozzle_mm": nozzle_mm,
                       "median_rms": normal["median_rms"], "cycles": self.cycles,
                       "rejected_captures": normal["rejected_captures"] + (peak["rejected_captures"] if flow_sweeps else 0),
                       "calibration_motion": dict(xy_accel_mm_s2=CALIBRATION_LIMITS[0],
@@ -368,7 +378,7 @@ def combine_flows(normal, peak, flow_sweeps):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--host", required=True, help="Moonraker URL for the stock K2.")
+    parser.add_argument("--host", required=True, help="Moonraker URL for the K2.")
     parser.add_argument("--slot", choices=SLOT_MATERIALS, required=True)
     parser.add_argument("--output", type=Path, default=Path(__file__).resolve().parent)
     args = parser.parse_args()

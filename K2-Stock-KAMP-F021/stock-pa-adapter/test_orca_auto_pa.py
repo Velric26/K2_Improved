@@ -78,6 +78,36 @@ class SweepTest(unittest.TestCase):
         self.assertEqual({capture["pa"] for capture in final}, {.0470, .0480})
         self.assertEqual(rank_direct(report["captures"])[1]["pa"], .0470)
 
+    def test_single_flow_refinement_sends_only_the_outer_wall_peak(self):
+        flow = 15.0832
+        report = {"prime_mm_per_stroke": 3., "captures": []}
+        feed = flow / (math.pi * .875 ** 2)
+
+        def read_capture(path):
+            setting = int(Path(path).stem.rsplit("_", 2)[-2])
+            return {"setting": setting, "timing": {}, "filament_feed_mm_s": [0., feed]}
+
+        def score_capture(capture):
+            error = .05 + abs(capture["setting"] - 500) / 1000
+            return {"rise": {"rms": error - .005}, "fall": {"rms": error}, "quality": {}}
+
+        with tempfile.TemporaryDirectory() as folder, \
+                patch("run_direct_pa_refinement.score_edges", side_effect=score_capture), patch("builtins.print"):
+            sweep = Mock(material="ABS", slot="D", temperature=280, folder=Path(folder))
+            sweep.status.return_value = {"extruder": {"target": 280, "temperature": 280}}
+            sweep.read.side_effect = read_capture
+            measure_direct(sweep, {"PEAK": flow}, "test", report, update=lambda _: None)
+
+        strokes = [line for call in sweep.send.call_args_list for line in call.args
+                   if line.startswith("STOCK_PA_DIRECT_STROKE ")]
+        self.assertEqual(len(strokes), 18)
+        self.assertTrue(all("FLOW=15.08320000 BAND=PEAK " in line for line in strokes))
+        self.assertEqual({capture["stage"] for capture in report["captures"]}, {"0.0050", "0.0025", "0.0005"})
+        rows, winner, _, _ = rank_direct(report["captures"], bands=("PEAK",))
+        self.assertEqual(winner["pa"], .0495)
+        self.assertEqual(len(rows), 9)
+        self.assertEqual(len(winner["scores"]), 2)
+
     def test_parking_exits_chute_along_y_before_crossing_x(self):
         state = {"print_stats": {"state": "standby"}, "virtual_sdcard": {"is_active": False},
                  "pause_resume": {"is_paused": False}, "webhooks": {"state": "ready"},
@@ -298,8 +328,9 @@ class HelperTest(unittest.TestCase):
         self.assertEqual(check_request(PAYLOAD, PRINTER), ("D", "ABS"))
         self.assertEqual(check_request({**PAYLOAD, "slot": "1B", "material": "PETG", "temperature_c": 240},
                                        PRINTER), ("B", "PETG"))
+        self.assertEqual(check_request({**PAYLOAD, "nozzle_mm": .6}, PRINTER), ("D", "ABS"))
         for change in ({"printer": "different"}, {"slot": "2D"}, {"material": "PLA"},
-                       {"temperature_c": 250}, {"nozzle_mm": 0.6}, {"max_flow_mm3_s": 0},
+                       {"temperature_c": 250}, {"nozzle_mm": 0.2}, {"nozzle_mm": "0.6"}, {"max_flow_mm3_s": 0},
                        {"max_flow_mm3_s": 20}, {"filament_diameter_mm": 1.75}):
             with self.subTest(change=change), self.assertRaises(ValueError):
                 check_request({**PAYLOAD, **change}, PRINTER)
@@ -372,8 +403,9 @@ class HelperTest(unittest.TestCase):
                 sweep = factory.return_value
                 sweep.status.return_value = state
 
-                def finish(preheated):
+                def finish(preheated, nozzle_mm):
                     self.assertTrue(preheated)
+                    self.assertEqual(nozzle_mm, .4)
                     if cancellation:
                         cancel.set()
                     return {"candidate": None}
@@ -413,6 +445,16 @@ class HelperTest(unittest.TestCase):
                                       "nozzle_mm": .4, "temperature_c": 280})
             sweep.read.assert_called_once()
 
+    def test_nozzle_mismatch_stops_before_printer_commands(self):
+        with patch("orca_auto_pa.Sweep") as factory:
+            sweep = factory.return_value
+            sweep.status.return_value = {"extruder": {"nozzle_diameter": .4}}
+            request = {**PAYLOAD, "nozzle_mm": .6}
+            with self.assertRaisesRegex(RuntimeError, "Orca selected 0.6 mm, but the K2 reports 0.4 mm"):
+                run_calibration(f"http://{PRINTER}:7125", CAPTURES, request, threading.Event(), Mock())
+            sweep.send.assert_not_called()
+            sweep.read.assert_not_called()
+
     def test_preset_flow_is_forwarded_and_firmware_limit_checked_first(self):
         state = {"extruder": {"target": 0, "nozzle_diameter": 0.4,
                               "pressure_advance": 0.038, "smooth_time": 0.038},
@@ -432,7 +474,7 @@ class HelperTest(unittest.TestCase):
             args = (f"http://{PRINTER}:7125", CAPTURES, request, threading.Event(), notify)
             run_calibration(*args)
             sweep.run.assert_called_once_with(preheated=True, max_flow=20, diameter=1.75, update=notify,
-                                              lower_flow=15.0832)
+                                              lower_flow=15.0832, nozzle_mm=.4)
             sweep.send.reset_mock()
             config["max_extrude_cross_section"] = 1
             with self.assertRaisesRegex(RuntimeError, "firmware's extrusion limit"):
@@ -440,9 +482,9 @@ class HelperTest(unittest.TestCase):
             sweep.send.assert_not_called()
 
     def test_continuous_gui_run_uses_slot_c_and_its_preset_temperature(self):
-        request = {**PAYLOAD, "slot": "1C", "material": "PETG", "temperature_c": 230, "reader": "continuous",
-                   "max_flow_mm3_s": 20, "lower_flow_mm3_s": 15.0832, "filament_diameter_mm": 1.75}
-        state = {"extruder": {"target": 0, "nozzle_diameter": .4, "pressure_advance": .038, "smooth_time": .038},
+        request = {**PAYLOAD, "slot": "1C", "material": "PETG", "temperature_c": 230, "reader": "continuous", "nozzle_mm": .6,
+                   "max_flow_mm3_s": 20, "filament_diameter_mm": 1.75}
+        state = {"extruder": {"target": 0, "nozzle_diameter": .6, "pressure_advance": .038, "smooth_time": .038},
                  "heater_bed": {"target": 0}, "k2_stock_pa_capture": {"samples": 700},
                  "toolhead": {"homed_axes": "xyz", "max_accel": 5000, "max_accel_to_decel": 100}}
 
@@ -453,11 +495,14 @@ class HelperTest(unittest.TestCase):
                 extruder = {"filament_diameter": 1.75, "max_extrude_cross_section": 100}
                 return {"result": {"status": {"configfile": {"settings": {"extruder": extruder}}}}}
             self.assertEqual(route, "/server/database/item")
+            self.assertEqual(body["key"], "slot_c_petg_0.6mm")
+            self.assertEqual(body["value"]["nozzle_mm"], .6)
             self.assertEqual(body["value"]["validation"], "continuous_pressure_sweep")
+            self.assertEqual(body["value"]["outer_wall_flow_mm3_s"], 20)
 
         def measure(sweep, flows, _stamp, report, *, update, diameter, extended_stroke):
             self.assertEqual(sweep.temperature, 230)
-            self.assertEqual(flows, {"LOWER": 15.0832, "PEAK": 20})
+            self.assertEqual(flows, {"PEAK": 20})
             self.assertEqual(diameter, 1.75)
             self.assertFalse(extended_stroke)
             self.assertEqual(report["prime_mm_per_stroke"], 3)
@@ -477,10 +522,14 @@ class HelperTest(unittest.TestCase):
             sweep.material_code = "000003"
             result = run_calibration(f"http://{PRINTER}:7125", Path(output), request, threading.Event(), lambda _: None)
             self.assertEqual(result["candidate"], .0625)
+            self.assertEqual(result["nozzle_mm"], .6)
             prepare.assert_called_once_with(sweep, state, recover_unassigned=True)
             self.assertEqual(result["slot"], "1C")
-            self.assertEqual(result["selected_scores"], [.045] * 4)
-            self.assertEqual(len(json.loads(Path(result["report_file"]).read_text())["captures"]), 8)
+            self.assertEqual(result["selected_scores"], [.045] * 2)
+            self.assertEqual(result["flow_sweeps"], [{"peak_mm3_s": 20}])
+            saved = json.loads(Path(result["report_file"]).read_text())
+            self.assertEqual(saved["nozzle_mm"], .6)
+            self.assertEqual(len(saved["captures"]), 4)
             self.assertEqual(sweep.check_filament.call_count, 1)
             self.assertTrue(sweep.send.call_args.args[0].startswith("STOCK_PA_CAPTURE "))
 
@@ -527,6 +576,11 @@ class HelperTest(unittest.TestCase):
                                   "combined_pa_measured_peak": True,
                                   "standalone_pa_uses_preset_flow": True,
                                   "standalone_pa_uses_wall_flows": True,
+                                  "standalone_pa_outer_wall_only": True,
+                                      "adaptive_pa": True,
+                                      "printed_adaptive_pa": True,
+                                      "adaptive_pa_profile_preheat": True,
+                                  "supported_nozzles_mm": [.4, .6],
                                   "pa_peak_limit_mm3_s": 24})
                     first = request(base, "POST", PAYLOAD)
                     first_url = f"{base}/{first['id']}"

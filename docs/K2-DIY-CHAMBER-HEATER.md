@@ -15,11 +15,15 @@
 
 [Live heater include](../K2-Stock-KAMP-F021/chamber_heater_fan_ac.cfg) · [On/off controller](../K2-Stock-KAMP-F021/k2_chamber_bang_bang.py) · [Creality board service reference](https://www.youtube.com/watch?v=wOV16smiMnU) · [Klipper heater verification](https://www.klipper3d.org/Config_Reference.html#verify_heater)
 
-On stock firmware **1.1.8.3**, the F021 Home page switches from its read-only chamber tile to a target layout during warmup. F021 skips creation of that target widget, leaving a blank space. A live capture confirmed the blank at **49 °C with a 60 °C target** and showed the read-only **50 °C** tile again after the target returned to zero. Offline emulation verified a display-only fix that keeps selecting the live readout for model **1015 / F021** during warmup. The stock screen remains installed.
+On stock firmware **1.1.8.3**, the F021 Home page hides its read-only chamber tile when a heater target is set. The target widget is absent on F021, leaving a blank space. A live capture confirmed the blank at **49 °C with a 60 °C target** and showed the live **50 °C** tile again after the target returned to zero. The Home-screen patch keeps the live readout selected for model **1015 / F021**. ARM emulation verified the stock failure, the corrected warmup path, and the unchanged visibility behavior of the other tested models. [Display patch](../K2-Stock-KAMP-F021/patch_chamber_home_tile.py)
+
+The patched display executable was saved on the K2 during the November 21 ABS job. It loads on the next printer boot. The original executable is backed up at `/mnt/UDISK/k2-before-chamber-home-tile-20261121-113026/display-server`. The patch checks the original binary hash before changing it. After a firmware update, verify the new binary before reapplying any display changes.
 
 An earlier Pro-style keypad trial sent `M141` to the exhaust fan and left the heater target at zero. For manual control, use **Chamber Heater** in Fluidd on port **4408** or `SET_HEATER_TEMPERATURE HEATER=chamber_heater TARGET=<temperature>`. Set `TARGET=0` to clear the request. [Stock macros](../K2-Stock-KAMP-F021/overlay/gcode_macro.cfg)
 
 For automatic control, enable **Support controlling chamber temperature** on the Orca printer preset and **Activate temperature control** on the starting filament. The K2 Mod presets send the filament’s target and minimum to `START_PRINT` as `CHAMBER_TEMP` and `CHAMBER_MIN`. Their bare `M191` keeps Orca from adding a separate chamber wait before machine startup. The startup macro disables the exhaust during chamber heating, warms the bed alongside the chamber, and waits for the requested minimum once the bed is at temperature and any configured soak has finished. The target stays active until the normal end or cancel cleanup. The Kingroom ABS profile drives toward **55 °C** and lets probing proceed at **50 °C** once the bed and nozzle standby targets are reached. ABS adds no timed bed soak. [Verified ABS startup](K2-STOCK-FIRMWARE-KAMP-AUTO-PA.md#verified-abs-startup-reference) · [Orca chamber settings](https://github.com/OrcaSlicer/OrcaSlicer/wiki/printer_basic_information_accessory#support-controlling-chamber-temperature)
+
+For Creality’s stock print preparation, the early `PRINT_TEMP_SET` starts the bed before the file runs. The overlay now requests chamber heat immediately after setting the bed target. It matches a fresh job record from Creality to the file’s explicit `CHAMBER_TEMP` and verifies both bed and nozzle temperatures against the preparation command. If the stock job or request cannot be verified, the file’s `START_PRINT` handles chamber heating. Early preheat stops if the bed target clears or if `START_PRINT` has not taken over within 20 minutes. `START_PRINT` still waits for the chamber minimum before adaptive probing.
 
 ## Representative heater tests
 
@@ -32,7 +36,7 @@ For automatic control, enable **Support controlling chamber temperature** on the
 
 Bench commissioning also verified that the SSR LED followed two three-second DC pulses and that the blower delivered steady warm airflow during a ten-second pulse before stopping. Regulation at 40 °C or 60 °C is still unverified in the recorded runs. For a timed handoff test, leave the printer-side heater shutoff queued. Use read-only logging after handoff and record missed polls as gaps. After a fault, the values displayed by Moonraker can include the last targets and outputs. Use Klipper’s shutdown log and observed airflow to confirm the stop.
 
-## USB add-on for vent servos, extra fans, and sensors
+## Expansion board for vent servos, extra fans, and sensors
 
 Use the K2’s **USB-A flash-drive port** as the host. A **Raspberry Pi Pico H** uses a **USB-A to Micro-USB data cable**. An **SKR Pico** uses a **USB-A to USB-C data cable**, with three switched fan outputs and two thermistor inputs onboard. A Pico H is the simpler DIY choice for several servo signals. [K2 port location](https://cdn.creality.com/ow/official/6bbb36e0-25b7-42b9-bb91-0451320ba2b0.pdf#page=5) · [Pico pinout](https://datasheets.raspberrypi.com/pico/pico-datasheet.pdf) · [SKR Pico hardware](https://github.com/bigtreetech/docs/blob/master/docs/SKR%20Pico.md)
 
@@ -45,6 +49,16 @@ Use the K2’s **USB-A flash-drive port** as the host. A **Raspberry Pi Pico H**
 Flash only the add-on with compatible Klipper MCU firmware in USB serial mode. First verify the K2 sees the board as a stable USB serial device, then add `[mcu vent_io]` with its device path and prefix accessory pins with `vent_io:`. USB enumeration and protocol compatibility on this printer are still untested. Secure the cable before printing because loss of a configured auxiliary MCU can stop Klipper. The existing heater cutoffs stay independent of the vent board. [Creality RP2040 build options](https://github.com/CrealityOfficial/K2_Series_Klipper/blob/main/src/rp2040/Kconfig) · [Klipper additional MCU](https://www.klipper3d.org/Config_Reference.html#mcu-my_extra_mcu) · [Creality MCU shutdown behavior](https://github.com/CrealityOfficial/K2_Series_Klipper/blob/main/klippy/mcu.py#L1076-L1098)
 
 The unused `FAN2_C` and `RFID` headers and the proposed `BED` / `PC12` heater route remain unverified on this PCB. The documented USB route avoids relying on those pin mappings. [F021 stock config](https://github.com/CrealityOfficial/K2_Series_Klipper/blob/main/config/F021_CR0CN200400C10/printer.cfg)
+
+### Connections besides USB
+
+| Link | What it would take on this K2 |
+| --- | --- |
+| **Direct UART** | Linux exposes `/dev/ttyS4` and pinmux maps it to **PB2/PB3 on the Linux host SoC**. A read-only check found no process holding it open. Its physical header or test pads, TX/RX assignments, and voltage are still unverified. If an accessible, compatible UART is confirmed, the Pico can use its GPIO0/GPIO1 serial mode. The link needs TX, RX, a common ground, and matching baud rates. Use level conversion if the logic voltages differ. [Creality RP2040 serial options](https://github.com/CrealityOfficial/K2_Series_Klipper/blob/main/src/rp2040/Kconfig#L88-L102) |
+| **Wi-Fi** | An **ESP32 running ESPHome** can read sensors and run the vent servos and fans independently. The K2 would need a separate control integration to command it over the LAN. Klipper’s standard `[mcu]` configuration supports local serial and CAN, with no native Wi-Fi MCU transport. Keep any temperature safety cutoffs local and hardwired. [ESPHome servo control](https://esphome.io/components/servo/) · [Klipper MCU configuration](https://www.klipper3d.org/Config_Reference.html#mcu) |
+| **CAN bus** | Klipper supports a CAN expansion MCU, but this K2 has no active CAN interface in Linux. It would need a compatible host-side CAN interface and transceiver, plus a CAN transceiver on the add-on board. The common USB-to-CAN bridge still uses the K2’s USB port. [Klipper CAN setup](https://www.klipper3d.org/CANBUS.html) |
+
+`ttyS0` is the Linux console, `ttyS2` is the main MCU link, `ttyS3` is the nozzle MCU link, and `ttyS5` runs the CFS RS‑485 bus. The `RFID`, `PC IN`, and fan connector labels do not establish an available UART pinout. Locate and verify the physical `ttyS4` signals before choosing a connector. [F021 MCU links](https://github.com/CrealityOfficial/K2_Series_Klipper/blob/main/config/F021_CR0CN200400C10/printer.cfg#L14-L22) · [F021 CFS bus](https://github.com/CrealityOfficial/K2_Series_Klipper/blob/main/config/F021_CR0CN200400C10/box.cfg#L1-L9)
 
 ## Restore or roll back
 

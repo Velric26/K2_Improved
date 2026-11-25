@@ -23,7 +23,7 @@ Before KAMP probes, `START_PRINT` reasserts the bed target and the **140 °C** p
 | PLA | 6 min (360 s) |
 | PETG | 6 min (360 s) |
 | ABS | None (0 s) |
-| ASA | 12 min (720 s) |
+| ASA | None (0 s) |
 
 The chamber and bed start warming together when the filament requests chamber heating. The macro keeps the bed at its target while waiting for the chamber minimum and during probing. The chamber minimum applies independently of the timed soak. [Orca chamber settings](K2-DIY-CHAMBER-HEATER.md#installed-heater-on-f021)
 

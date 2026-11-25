@@ -1,0 +1,1576 @@
+{
+  "slot": "1D",
+  "material": "ABS",
+  "nozzle_mm": 0.6,
+  "temperature_c": 280,
+  "flows": {
+    "LOWER": 18.0,
+    "PEAK": 18.0
+  },
+  "prime_mm_per_stroke": 3.0,
+  "captures": [
+    {
+      "band": "LOWER",
+      "flow": 18.0,
+      "pa": 0.04,
+      "repeat": 1,
+      "stage": "0.0050",
+      "file": "stock_pa_direct_d_ref_164524_400_L1.json",
+      "timing": {
+        "count": 3915,
+        "span_s": 3.1296,
+        "median_interval_ms": 0.7998,
+        "max_interval_ms": 0.806,
+        "gaps_over_12_ms": 0,
+        "median_gap_ms": null
+      },
+      "quality": {
+        "rise": {
+          "usable": true,
+          "reason": null,
+          "max_gap_ms": 0.8
+        },
+        "fall": {
+          "usable": true,
+          "reason": null,
+          "max_gap_ms": 0.8
+        }
+      },
+      "edges": {
+        "rise": {
+          "signed_s": -0.13498471281035396,
+          "rms": 0.7059100832367533
+        },
+        "fall": {
+          "signed_s": -0.039930839287247465,
+          "rms": 0.07643115450891784
+        }
+      }
+    },
+    {
+      "band": "PEAK",
+      "flow": 18.0,
+      "pa": 0.04,
+      "repeat": 1,
+      "stage": "0.0050",
+      "file": "stock_pa_direct_d_ref_164524_400_P1.json",
+      "timing": {
+        "count": 3970,
+        "span_s": 3.1732,
+        "median_interval_ms": 0.7997,
+        "max_interval_ms": 0.812,
+        "gaps_over_12_ms": 0,
+        "median_gap_ms": null
+      },
+      "quality": {
+        "rise": {
+          "usable": true,
+          "reason": null,
+          "max_gap_ms": 0.8
+        },
+        "fall": {
+          "usable": true,
+          "reason": null,
+          "max_gap_ms": 0.8
+        }
+      },
+      "edges": {
+        "rise": {
+          "signed_s": 0.014442944375532469,
+          "rms": 0.07808751092411303
+        },
+        "fall": {
+          "signed_s": -0.007926113910615038,
+          "rms": 0.1017867653498091
+        }
+      }
+    },
+    {
+      "band": "LOWER",
+      "flow": 18.0,
+      "pa": 0.045,
+      "repeat": 1,
+      "stage": "0.0050",
+      "file": "stock_pa_direct_d_ref_164524_450_L1.json",
+      "timing": {
+        "count": 4036,
+        "span_s": 3.226,
+        "median_interval_ms": 0.7997,
+        "max_interval_ms": 0.806,
+        "gaps_over_12_ms": 0,
+        "median_gap_ms": null
+      },
+      "quality": {
+        "rise": {
+          "usable": true,
+          "reason": null,
+          "max_gap_ms": 0.8
+        },
+        "fall": {
+          "usable": true,
+          "reason": null,
+          "max_gap_ms": 0.8
+        }
+      },
+      "edges": {
+        "rise": {
+          "signed_s": 0.017150321095528772,
+          "rms": 0.11480876345944284
+        },
+        "fall": {
+          "signed_s": -0.022276957392132663,
+          "rms": 0.10723808350937626
+        }
+      }
+    },
+    {
+      "band": "PEAK",
+      "flow": 18.0,
+      "pa": 0.045,
+      "repeat": 1,
+      "stage": "0.0050",
+      "file": "stock_pa_direct_d_ref_164524_450_P1.json",
+      "timing": {
+        "count": 4021,
+        "span_s": 3.214,
+        "median_interval_ms": 0.7997,
+        "max_interval_ms": 0.806,
+        "gaps_over_12_ms": 0,
+        "median_gap_ms": null
+      },
+      "quality": {
+        "rise": {
+          "usable": true,
+          "reason": null,
+          "max_gap_ms": 0.8
+        },
+        "fall": {
+          "usable": true,
+          "reason": null,
+          "max_gap_ms": 0.8
+        }
+      },
+      "edges": {
+        "rise": {
+          "signed_s": 0.01769865706115484,
+          "rms": 0.12230512848251836
+        },
+        "fall": {
+          "signed_s": -0.011163505974059995,
+          "rms": 0.09554397333594886
+        }
+      }
+    },
+    {
+      "band": "LOWER",
+      "flow": 18.0,
+      "pa": 0.05,
+      "repeat": 1,
+      "stage": "0.0050",
+      "file": "stock_pa_direct_d_ref_164524_500_L1.json",
+      "timing": {
+        "count": 3983,
+        "span_s": 3.1837,
+        "median_interval_ms": 0.7997,
+        "max_interval_ms": 0.806,
+        "gaps_over_12_ms": 0,
+        "median_gap_ms": null
+      },
+      "quality": {
+        "rise": {
+          "usable": true,
+          "reason": null,
+          "max_gap_ms": 0.8
+        },
+        "fall": {
+          "usable": true,
+          "reason": null,
+          "max_gap_ms": 0.8
+        }
+      },
+      "edges": {
+        "rise": {
+          "signed_s": 0.01429759799696117,
+          "rms": 0.09059277121971725
+        },
+        "fall": {
+          "signed_s": -0.025532933795604014,
+          "rms": 0.11896930323455662
+        }
+      }
+    },
+    {
+      "band": "PEAK",
+      "flow": 18.0,
+      "pa": 0.05,
+      "repeat": 1,
+      "stage": "0.0050",
+      "file": "stock_pa_direct_d_ref_164524_500_P1.json",
+      "timing": {
+        "count": 4012,
+        "span_s": 3.2063,
+        "median_interval_ms": 0.7996,
+        "max_interval_ms": 0.807,
+        "gaps_over_12_ms": 0,
+        "median_gap_ms": null
+      },
+      "quality": {
+        "rise": {
+          "usable": true,
+          "reason": null,
+          "max_gap_ms": 0.8
+        },
+        "fall": {
+          "usable": true,
+          "reason": null,
+          "max_gap_ms": 0.8
+        }
+      },
+      "edges": {
+        "rise": {
+          "signed_s": 0.025581078191909173,
+          "rms": 0.16205634386215706
+        },
+        "fall": {
+          "signed_s": -0.012966222617056027,
+          "rms": 0.11871262419613172
+        }
+      }
+    },
+    {
+      "band": "LOWER",
+      "flow": 18.0,
+      "pa": 0.055,
+      "repeat": 1,
+      "stage": "0.0050",
+      "file": "stock_pa_direct_d_ref_164524_550_L1.json",
+      "timing": {
+        "count": 3993,
+        "span_s": 3.1915,
+        "median_interval_ms": 0.7997,
+        "max_interval_ms": 0.806,
+        "gaps_over_12_ms": 0,
+        "median_gap_ms": null
+      },
+      "quality": {
+        "rise": {
+          "usable": true,
+          "reason": null,
+          "max_gap_ms": 0.8
+        },
+        "fall": {
+          "usable": true,
+          "reason": null,
+          "max_gap_ms": 0.8
+        }
+      },
+      "edges": {
+        "rise": {
+          "signed_s": 0.01998544956126037,
+          "rms": 0.10894723889967985
+        },
+        "fall": {
+          "signed_s": -0.026461396589693185,
+          "rms": 0.1300714592352202
+        }
+      }
+    },
+    {
+      "band": "PEAK",
+      "flow": 18.0,
+      "pa": 0.055,
+      "repeat": 1,
+      "stage": "0.0050",
+      "file": "stock_pa_direct_d_ref_164524_550_P1.json",
+      "timing": {
+        "count": 3980,
+        "span_s": 3.1813,
+        "median_interval_ms": 0.7996,
+        "max_interval_ms": 0.883,
+        "gaps_over_12_ms": 0,
+        "median_gap_ms": null
+      },
+      "quality": {
+        "rise": {
+          "usable": true,
+          "reason": null,
+          "max_gap_ms": 0.8
+        },
+        "fall": {
+          "usable": true,
+          "reason": null,
+          "max_gap_ms": 0.8
+        }
+      },
+      "edges": {
+        "rise": {
+          "signed_s": 0.015333859453259867,
+          "rms": 0.16355375628937757
+        },
+        "fall": {
+          "signed_s": -0.03315108124193894,
+          "rms": 0.1808813704494693
+        }
+      }
+    },
+    {
+      "band": "LOWER",
+      "flow": 18.0,
+      "pa": 0.06,
+      "repeat": 1,
+      "stage": "0.0050",
+      "file": "stock_pa_direct_d_ref_164524_600_L1.json",
+      "timing": {
+        "count": 3894,
+        "span_s": 3.1123,
+        "median_interval_ms": 0.7997,
+        "max_interval_ms": 0.812,
+        "gaps_over_12_ms": 0,
+        "median_gap_ms": null
+      },
+      "quality": {
+        "rise": {
+          "usable": true,
+          "reason": null,
+          "max_gap_ms": 0.8
+        },
+        "fall": {
+          "usable": true,
+          "reason": null,
+          "max_gap_ms": 0.8
+        }
+      },
+      "edges": {
+        "rise": {
+          "signed_s": 0.023539737661150095,
+          "rms": 0.14221105223782465
+        },
+        "fall": {
+          "signed_s": -0.027979795744615777,
+          "rms": 0.15937632986483097
+        }
+      }
+    },
+    {
+      "band": "PEAK",
+      "flow": 18.0,
+      "pa": 0.06,
+      "repeat": 1,
+      "stage": "0.0050",
+      "file": "stock_pa_direct_d_ref_164524_600_P1.json",
+      "timing": {
+        "count": 4132,
+        "span_s": 3.3031,
+        "median_interval_ms": 0.7996,
+        "max_interval_ms": 0.905,
+        "gaps_over_12_ms": 0,
+        "median_gap_ms": null
+      },
+      "quality": {
+        "rise": {
+          "usable": true,
+          "reason": null,
+          "max_gap_ms": 0.8
+        },
+        "fall": {
+          "usable": true,
+          "reason": null,
+          "max_gap_ms": 0.8
+        }
+      },
+      "edges": {
+        "rise": {
+          "signed_s": 0.016839208153846045,
+          "rms": 0.15783427079982382
+        },
+        "fall": {
+          "signed_s": -0.04912183164816246,
+          "rms": 0.2291675259889955
+        }
+      }
+    },
+    {
+      "band": "PEAK",
+      "flow": 18.0,
+      "pa": 0.06,
+      "repeat": 2,
+      "stage": "0.0050",
+      "file": "stock_pa_direct_d_ref_164524_600_P2.json",
+      "timing": {
+        "count": 4020,
+        "span_s": 3.2128,
+        "median_interval_ms": 0.7996,
+        "max_interval_ms": 0.816,
+        "gaps_over_12_ms": 0,
+        "median_gap_ms": null
+      },
+      "quality": {
+        "rise": {
+          "usable": true,
+          "reason": null,
+          "max_gap_ms": 0.8
+        },
+        "fall": {
+          "usable": true,
+          "reason": null,
+          "max_gap_ms": 0.8
+        }
+      },
+      "edges": {
+        "rise": {
+          "signed_s": 0.014247119919355464,
+          "rms": 0.20795309323169553
+        },
+        "fall": {
+          "signed_s": -0.05411573034875066,
+          "rms": 0.2879850084938574
+        }
+      }
+    },
+    {
+      "band": "LOWER",
+      "flow": 18.0,
+      "pa": 0.06,
+      "repeat": 2,
+      "stage": "0.0050",
+      "file": "stock_pa_direct_d_ref_164524_600_L2.json",
+      "timing": {
+        "count": 4025,
+        "span_s": 3.2169,
+        "median_interval_ms": 0.7996,
+        "max_interval_ms": 0.842,
+        "gaps_over_12_ms": 0,
+        "median_gap_ms": null
+      },
+      "quality": {
+        "rise": {
+          "usable": true,
+          "reason": null,
+          "max_gap_ms": 0.8
+        },
+        "fall": {
+          "usable": true,
+          "reason": null,
+          "max_gap_ms": 0.8
+        }
+      },
+      "edges": {
+        "rise": {
+          "signed_s": 0.02516251418469459,
+          "rms": 0.15264671266570287
+        },
+        "fall": {
+          "signed_s": -0.03212384391569306,
+          "rms": 0.18838382194136027
+        }
+      }
+    },
+    {
+      "band": "PEAK",
+      "flow": 18.0,
+      "pa": 0.055,
+      "repeat": 2,
+      "stage": "0.0050",
+      "file": "stock_pa_direct_d_ref_164524_550_P2.json",
+      "timing": {
+        "count": 3983,
+        "span_s": 3.1839,
+        "median_interval_ms": 0.7997,
+        "max_interval_ms": 0.805,
+        "gaps_over_12_ms": 0,
+        "median_gap_ms": null
+      },
+      "quality": {
+        "rise": {
+          "usable": true,
+          "reason": null,
+          "max_gap_ms": 0.8
+        },
+        "fall": {
+          "usable": true,
+          "reason": null,
+          "max_gap_ms": 0.8
+        }
+      },
+      "edges": {
+        "rise": {
+          "signed_s": 0.02684103499181702,
+          "rms": 0.11382603518709714
+        },
+        "fall": {
+          "signed_s": -0.032088422035743414,
+          "rms": 0.16090486973645152
+        }
+      }
+    },
+    {
+      "band": "LOWER",
+      "flow": 18.0,
+      "pa": 0.055,
+      "repeat": 2,
+      "stage": "0.0050",
+      "file": "stock_pa_direct_d_ref_164524_550_L2.json",
+      "timing": {
+        "count": 4022,
+        "span_s": 3.2149,
+        "median_interval_ms": 0.7997,
+        "max_interval_ms": 0.809,
+        "gaps_over_12_ms": 0,
+        "median_gap_ms": null
+      },
+      "quality": {
+        "rise": {
+          "usable": true,
+          "reason": null,
+          "max_gap_ms": 0.8
+        },
+        "fall": {
+          "usable": true,
+          "reason": null,
+          "max_gap_ms": 0.8
+        }
+      },
+      "edges": {
+        "rise": {
+          "signed_s": 0.024965978886633163,
+          "rms": 0.13459717576212515
+        },
+        "fall": {
+          "signed_s": -0.017187912812177755,
+          "rms": 0.12447138071119122
+        }
+      }
+    },
+    {
+      "band": "PEAK",
+      "flow": 18.0,
+      "pa": 0.05,
+      "repeat": 2,
+      "stage": "0.0050",
+      "file": "stock_pa_direct_d_ref_164524_500_P2.json",
+      "timing": {
+        "count": 3977,
+        "span_s": 3.1787,
+        "median_interval_ms": 0.7996,
+        "max_interval_ms": 0.807,
+        "gaps_over_12_ms": 0,
+        "median_gap_ms": null
+      },
+      "quality": {
+        "rise": {
+          "usable": true,
+          "reason": null,
+          "max_gap_ms": 0.8
+        },
+        "fall": {
+          "usable": true,
+          "reason": null,
+          "max_gap_ms": 0.8
+        }
+      },
+      "edges": {
+        "rise": {
+          "signed_s": 0.022903216252593242,
+          "rms": 0.08629725221545417
+        },
+        "fall": {
+          "signed_s": -0.015442560555584139,
+          "rms": 0.11978466633744507
+        }
+      }
+    },
+    {
+      "band": "LOWER",
+      "flow": 18.0,
+      "pa": 0.05,
+      "repeat": 2,
+      "stage": "0.0050",
+      "file": "stock_pa_direct_d_ref_164524_500_L2.json",
+      "timing": {
+        "count": 4032,
+        "span_s": 3.2226,
+        "median_interval_ms": 0.7997,
+        "max_interval_ms": 0.82,
+        "gaps_over_12_ms": 0,
+        "median_gap_ms": null
+      },
+      "quality": {
+        "rise": {
+          "usable": true,
+          "reason": null,
+          "max_gap_ms": 0.8
+        },
+        "fall": {
+          "usable": true,
+          "reason": null,
+          "max_gap_ms": 0.8
+        }
+      },
+      "edges": {
+        "rise": {
+          "signed_s": 0.02099552793437863,
+          "rms": 0.11156970218471249
+        },
+        "fall": {
+          "signed_s": -0.017050627931386036,
+          "rms": 0.10318148228027121
+        }
+      }
+    },
+    {
+      "band": "PEAK",
+      "flow": 18.0,
+      "pa": 0.045,
+      "repeat": 2,
+      "stage": "0.0050",
+      "file": "stock_pa_direct_d_ref_164524_450_P2.json",
+      "timing": {
+        "count": 3975,
+        "span_s": 3.1767,
+        "median_interval_ms": 0.7996,
+        "max_interval_ms": 0.807,
+        "gaps_over_12_ms": 0,
+        "median_gap_ms": null
+      },
+      "quality": {
+        "rise": {
+          "usable": true,
+          "reason": null,
+          "max_gap_ms": 0.81
+        },
+        "fall": {
+          "usable": true,
+          "reason": null,
+          "max_gap_ms": 0.8
+        }
+      },
+      "edges": {
+        "rise": {
+          "signed_s": 0.014123044915288596,
+          "rms": 0.11593704897904425
+        },
+        "fall": {
+          "signed_s": -0.016888933078148333,
+          "rms": 0.1065839217999325
+        }
+      }
+    },
+    {
+      "band": "LOWER",
+      "flow": 18.0,
+      "pa": 0.045,
+      "repeat": 2,
+      "stage": "0.0050",
+      "file": "stock_pa_direct_d_ref_164524_450_L2.json",
+      "timing": {
+        "count": 3945,
+        "span_s": 3.153,
+        "median_interval_ms": 0.7997,
+        "max_interval_ms": 0.807,
+        "gaps_over_12_ms": 0,
+        "median_gap_ms": null
+      },
+      "quality": {
+        "rise": {
+          "usable": true,
+          "reason": null,
+          "max_gap_ms": 0.8
+        },
+        "fall": {
+          "usable": true,
+          "reason": null,
+          "max_gap_ms": 0.8
+        }
+      },
+      "edges": {
+        "rise": {
+          "signed_s": 0.007524244789572103,
+          "rms": 0.053956925032928704
+        },
+        "fall": {
+          "signed_s": -0.02492567644629581,
+          "rms": 0.10044993681949548
+        }
+      }
+    },
+    {
+      "band": "PEAK",
+      "flow": 18.0,
+      "pa": 0.04,
+      "repeat": 2,
+      "stage": "0.0050",
+      "file": "stock_pa_direct_d_ref_164524_400_P2.json",
+      "timing": {
+        "count": 4017,
+        "span_s": 3.2103,
+        "median_interval_ms": 0.7995,
+        "max_interval_ms": 0.805,
+        "gaps_over_12_ms": 0,
+        "median_gap_ms": null
+      },
+      "quality": {
+        "rise": {
+          "usable": true,
+          "reason": null,
+          "max_gap_ms": 0.8
+        },
+        "fall": {
+          "usable": true,
+          "reason": null,
+          "max_gap_ms": 0.8
+        }
+      },
+      "edges": {
+        "rise": {
+          "signed_s": 0.0169180453498281,
+          "rms": 0.11956253847604566
+        },
+        "fall": {
+          "signed_s": -0.00012955940811421369,
+          "rms": 0.07798794720839515
+        }
+      }
+    },
+    {
+      "band": "LOWER",
+      "flow": 18.0,
+      "pa": 0.04,
+      "repeat": 2,
+      "stage": "0.0050",
+      "file": "stock_pa_direct_d_ref_164524_400_L2.json",
+      "timing": {
+        "count": 4033,
+        "span_s": 3.2227,
+        "median_interval_ms": 0.7996,
+        "max_interval_ms": 0.807,
+        "gaps_over_12_ms": 0,
+        "median_gap_ms": null
+      },
+      "quality": {
+        "rise": {
+          "usable": true,
+          "reason": null,
+          "max_gap_ms": 0.8
+        },
+        "fall": {
+          "usable": true,
+          "reason": null,
+          "max_gap_ms": 0.8
+        }
+      },
+      "edges": {
+        "rise": {
+          "signed_s": 0.009370994516622154,
+          "rms": 0.06296020908426282
+        },
+        "fall": {
+          "signed_s": -0.007837424817210385,
+          "rms": 0.06526959167717374
+        }
+      }
+    },
+    {
+      "band": "LOWER",
+      "flow": 18.0,
+      "pa": 0.0425,
+      "repeat": 1,
+      "stage": "0.0025",
+      "file": "stock_pa_direct_d_ref_164524_425_L1.json",
+      "timing": {
+        "count": 4021,
+        "span_s": 3.2134,
+        "median_interval_ms": 0.7996,
+        "max_interval_ms": 0.805,
+        "gaps_over_12_ms": 0,
+        "median_gap_ms": null
+      },
+      "quality": {
+        "rise": {
+          "usable": true,
+          "reason": null,
+          "max_gap_ms": 0.8
+        },
+        "fall": {
+          "usable": true,
+          "reason": null,
+          "max_gap_ms": 0.8
+        }
+      },
+      "edges": {
+        "rise": {
+          "signed_s": 0.02648021267877876,
+          "rms": 0.10082336084916872
+        },
+        "fall": {
+          "signed_s": -0.004687835431720865,
+          "rms": 0.051899374744743085
+        }
+      }
+    },
+    {
+      "band": "PEAK",
+      "flow": 18.0,
+      "pa": 0.0425,
+      "repeat": 1,
+      "stage": "0.0025",
+      "file": "stock_pa_direct_d_ref_164524_425_P1.json",
+      "timing": {
+        "count": 4030,
+        "span_s": 3.221,
+        "median_interval_ms": 0.7995,
+        "max_interval_ms": 0.922,
+        "gaps_over_12_ms": 0,
+        "median_gap_ms": null
+      },
+      "quality": {
+        "rise": {
+          "usable": true,
+          "reason": null,
+          "max_gap_ms": 0.8
+        },
+        "fall": {
+          "usable": true,
+          "reason": null,
+          "max_gap_ms": 0.8
+        }
+      },
+      "edges": {
+        "rise": {
+          "signed_s": 0.01418317424618673,
+          "rms": 0.0915481535030481
+        },
+        "fall": {
+          "signed_s": -0.02113885309356815,
+          "rms": 0.08423161093001662
+        }
+      }
+    },
+    {
+      "band": "LOWER",
+      "flow": 18.0,
+      "pa": 0.0475,
+      "repeat": 1,
+      "stage": "0.0025",
+      "file": "stock_pa_direct_d_ref_164524_475_L1.json",
+      "timing": {
+        "count": 4034,
+        "span_s": 3.2233,
+        "median_interval_ms": 0.7995,
+        "max_interval_ms": 0.83,
+        "gaps_over_12_ms": 0,
+        "median_gap_ms": null
+      },
+      "quality": {
+        "rise": {
+          "usable": true,
+          "reason": null,
+          "max_gap_ms": 0.8
+        },
+        "fall": {
+          "usable": true,
+          "reason": null,
+          "max_gap_ms": 0.8
+        }
+      },
+      "edges": {
+        "rise": {
+          "signed_s": 0.023409763832608912,
+          "rms": 0.11021116639860035
+        },
+        "fall": {
+          "signed_s": -0.013177020130334352,
+          "rms": 0.09129078830203408
+        }
+      }
+    },
+    {
+      "band": "PEAK",
+      "flow": 18.0,
+      "pa": 0.0475,
+      "repeat": 1,
+      "stage": "0.0025",
+      "file": "stock_pa_direct_d_ref_164524_475_P1.json",
+      "timing": {
+        "count": 3983,
+        "span_s": 3.1827,
+        "median_interval_ms": 0.7995,
+        "max_interval_ms": 0.842,
+        "gaps_over_12_ms": 0,
+        "median_gap_ms": null
+      },
+      "quality": {
+        "rise": {
+          "usable": true,
+          "reason": null,
+          "max_gap_ms": 0.8
+        },
+        "fall": {
+          "usable": true,
+          "reason": null,
+          "max_gap_ms": 0.8
+        }
+      },
+      "edges": {
+        "rise": {
+          "signed_s": 0.002837454227222479,
+          "rms": 0.07841146691817871
+        },
+        "fall": {
+          "signed_s": -0.023271208375457635,
+          "rms": 0.12186197115538383
+        }
+      }
+    },
+    {
+      "band": "PEAK",
+      "flow": 18.0,
+      "pa": 0.0475,
+      "repeat": 2,
+      "stage": "0.0025",
+      "file": "stock_pa_direct_d_ref_164524_475_P2.json",
+      "timing": {
+        "count": 4033,
+        "span_s": 3.2233,
+        "median_interval_ms": 0.7995,
+        "max_interval_ms": 0.808,
+        "gaps_over_12_ms": 0,
+        "median_gap_ms": null
+      },
+      "quality": {
+        "rise": {
+          "usable": true,
+          "reason": null,
+          "max_gap_ms": 0.8
+        },
+        "fall": {
+          "usable": true,
+          "reason": null,
+          "max_gap_ms": 0.8
+        }
+      },
+      "edges": {
+        "rise": {
+          "signed_s": 0.024533053833893814,
+          "rms": 0.08153391661625582
+        },
+        "fall": {
+          "signed_s": -0.016013852798749194,
+          "rms": 0.11480723023370686
+        }
+      }
+    },
+    {
+      "band": "LOWER",
+      "flow": 18.0,
+      "pa": 0.0475,
+      "repeat": 2,
+      "stage": "0.0025",
+      "file": "stock_pa_direct_d_ref_164524_475_L2.json",
+      "timing": {
+        "count": 3977,
+        "span_s": 3.1785,
+        "median_interval_ms": 0.7996,
+        "max_interval_ms": 0.818,
+        "gaps_over_12_ms": 0,
+        "median_gap_ms": null
+      },
+      "quality": {
+        "rise": {
+          "usable": true,
+          "reason": null,
+          "max_gap_ms": 0.8
+        },
+        "fall": {
+          "usable": true,
+          "reason": null,
+          "max_gap_ms": 0.8
+        }
+      },
+      "edges": {
+        "rise": {
+          "signed_s": 0.01897734863337616,
+          "rms": 0.1173500140766561
+        },
+        "fall": {
+          "signed_s": -0.014212966407053482,
+          "rms": 0.0932356847958614
+        }
+      }
+    },
+    {
+      "band": "PEAK",
+      "flow": 18.0,
+      "pa": 0.0425,
+      "repeat": 2,
+      "stage": "0.0025",
+      "file": "stock_pa_direct_d_ref_164524_425_P2.json",
+      "timing": {
+        "count": 4012,
+        "span_s": 3.2063,
+        "median_interval_ms": 0.7995,
+        "max_interval_ms": 0.808,
+        "gaps_over_12_ms": 0,
+        "median_gap_ms": null
+      },
+      "quality": {
+        "rise": {
+          "usable": true,
+          "reason": null,
+          "max_gap_ms": 0.8
+        },
+        "fall": {
+          "usable": true,
+          "reason": null,
+          "max_gap_ms": 0.8
+        }
+      },
+      "edges": {
+        "rise": {
+          "signed_s": 0.013053105031954042,
+          "rms": 0.09874577655433955
+        },
+        "fall": {
+          "signed_s": -0.016424075303039947,
+          "rms": 0.09545436345851763
+        }
+      }
+    },
+    {
+      "band": "LOWER",
+      "flow": 18.0,
+      "pa": 0.0425,
+      "repeat": 2,
+      "stage": "0.0025",
+      "file": "stock_pa_direct_d_ref_164524_425_L2.json",
+      "timing": {
+        "count": 4037,
+        "span_s": 3.2258,
+        "median_interval_ms": 0.7995,
+        "max_interval_ms": 0.807,
+        "gaps_over_12_ms": 0,
+        "median_gap_ms": null
+      },
+      "quality": {
+        "rise": {
+          "usable": true,
+          "reason": null,
+          "max_gap_ms": 0.8
+        },
+        "fall": {
+          "usable": true,
+          "reason": null,
+          "max_gap_ms": 0.8
+        }
+      },
+      "edges": {
+        "rise": {
+          "signed_s": -0.000183848266844812,
+          "rms": 0.07368279459598655
+        },
+        "fall": {
+          "signed_s": -0.020565882521050002,
+          "rms": 0.1117138821922557
+        }
+      }
+    },
+    {
+      "band": "LOWER",
+      "flow": 18.0,
+      "pa": 0.042,
+      "repeat": 1,
+      "stage": "0.0005",
+      "file": "stock_pa_direct_d_ref_164524_420_L1.json",
+      "timing": {
+        "count": 3986,
+        "span_s": 3.1852,
+        "median_interval_ms": 0.7996,
+        "max_interval_ms": 0.836,
+        "gaps_over_12_ms": 0,
+        "median_gap_ms": null
+      },
+      "quality": {
+        "rise": {
+          "usable": true,
+          "reason": null,
+          "max_gap_ms": 0.8
+        },
+        "fall": {
+          "usable": true,
+          "reason": null,
+          "max_gap_ms": 0.8
+        }
+      },
+      "edges": {
+        "rise": {
+          "signed_s": 0.017339888457813014,
+          "rms": 0.07894083351619854
+        },
+        "fall": {
+          "signed_s": -0.022484555138557565,
+          "rms": 0.10105215893615813
+        }
+      }
+    },
+    {
+      "band": "PEAK",
+      "flow": 18.0,
+      "pa": 0.042,
+      "repeat": 1,
+      "stage": "0.0005",
+      "file": "stock_pa_direct_d_ref_164524_420_P1.json",
+      "timing": {
+        "count": 3983,
+        "span_s": 3.1832,
+        "median_interval_ms": 0.7995,
+        "max_interval_ms": 0.808,
+        "gaps_over_12_ms": 0,
+        "median_gap_ms": null
+      },
+      "quality": {
+        "rise": {
+          "usable": true,
+          "reason": null,
+          "max_gap_ms": 0.8
+        },
+        "fall": {
+          "usable": true,
+          "reason": null,
+          "max_gap_ms": 0.8
+        }
+      },
+      "edges": {
+        "rise": {
+          "signed_s": 0.015440244965978739,
+          "rms": 0.12178116083547652
+        },
+        "fall": {
+          "signed_s": -0.007435121375019419,
+          "rms": 0.07337896385311288
+        }
+      }
+    },
+    {
+      "band": "LOWER",
+      "flow": 18.0,
+      "pa": 0.043,
+      "repeat": 1,
+      "stage": "0.0005",
+      "file": "stock_pa_direct_d_ref_164524_430_L1.json",
+      "timing": {
+        "count": 4028,
+        "span_s": 3.2187,
+        "median_interval_ms": 0.7996,
+        "max_interval_ms": 0.827,
+        "gaps_over_12_ms": 0,
+        "median_gap_ms": null
+      },
+      "quality": {
+        "rise": {
+          "usable": true,
+          "reason": null,
+          "max_gap_ms": 0.8
+        },
+        "fall": {
+          "usable": true,
+          "reason": null,
+          "max_gap_ms": 0.8
+        }
+      },
+      "edges": {
+        "rise": {
+          "signed_s": 0.016277377050474686,
+          "rms": 0.0806032307537219
+        },
+        "fall": {
+          "signed_s": -0.01529138662565222,
+          "rms": 0.08820999965049298
+        }
+      }
+    },
+    {
+      "band": "PEAK",
+      "flow": 18.0,
+      "pa": 0.043,
+      "repeat": 1,
+      "stage": "0.0005",
+      "file": "stock_pa_direct_d_ref_164524_430_P1.json",
+      "timing": {
+        "count": 3963,
+        "span_s": 3.1675,
+        "median_interval_ms": 0.7996,
+        "max_interval_ms": 0.813,
+        "gaps_over_12_ms": 0,
+        "median_gap_ms": null
+      },
+      "quality": {
+        "rise": {
+          "usable": true,
+          "reason": null,
+          "max_gap_ms": 0.8
+        },
+        "fall": {
+          "usable": true,
+          "reason": null,
+          "max_gap_ms": 0.8
+        }
+      },
+      "edges": {
+        "rise": {
+          "signed_s": 0.015692703447510465,
+          "rms": 0.10182091248675379
+        },
+        "fall": {
+          "signed_s": -0.013615575480169144,
+          "rms": 0.08319431465619315
+        }
+      }
+    },
+    {
+      "band": "PEAK",
+      "flow": 18.0,
+      "pa": 0.043,
+      "repeat": 2,
+      "stage": "0.0005",
+      "file": "stock_pa_direct_d_ref_164524_430_P2.json",
+      "timing": {
+        "count": 4091,
+        "span_s": 3.2696,
+        "median_interval_ms": 0.7995,
+        "max_interval_ms": 0.84,
+        "gaps_over_12_ms": 0,
+        "median_gap_ms": null
+      },
+      "quality": {
+        "rise": {
+          "usable": true,
+          "reason": null,
+          "max_gap_ms": 0.8
+        },
+        "fall": {
+          "usable": true,
+          "reason": null,
+          "max_gap_ms": 0.8
+        }
+      },
+      "edges": {
+        "rise": {
+          "signed_s": -0.007625299249670695,
+          "rms": 0.12224717797090577
+        },
+        "fall": {
+          "signed_s": -0.021912143909345108,
+          "rms": 0.12075202480253344
+        }
+      }
+    },
+    {
+      "band": "LOWER",
+      "flow": 18.0,
+      "pa": 0.043,
+      "repeat": 2,
+      "stage": "0.0005",
+      "file": "stock_pa_direct_d_ref_164524_430_L2.json",
+      "timing": {
+        "count": 3990,
+        "span_s": 3.1885,
+        "median_interval_ms": 0.7996,
+        "max_interval_ms": 0.847,
+        "gaps_over_12_ms": 0,
+        "median_gap_ms": null
+      },
+      "quality": {
+        "rise": {
+          "usable": true,
+          "reason": null,
+          "max_gap_ms": 0.8
+        },
+        "fall": {
+          "usable": true,
+          "reason": null,
+          "max_gap_ms": 0.8
+        }
+      },
+      "edges": {
+        "rise": {
+          "signed_s": 0.01620230963232197,
+          "rms": 0.08445492301282667
+        },
+        "fall": {
+          "signed_s": -0.010263500128494463,
+          "rms": 0.07386939755329865
+        }
+      }
+    },
+    {
+      "band": "PEAK",
+      "flow": 18.0,
+      "pa": 0.042,
+      "repeat": 2,
+      "stage": "0.0005",
+      "file": "stock_pa_direct_d_ref_164524_420_P2.json",
+      "timing": {
+        "count": 4031,
+        "span_s": 3.2215,
+        "median_interval_ms": 0.7994,
+        "max_interval_ms": 0.805,
+        "gaps_over_12_ms": 0,
+        "median_gap_ms": null
+      },
+      "quality": {
+        "rise": {
+          "usable": true,
+          "reason": null,
+          "max_gap_ms": 0.8
+        },
+        "fall": {
+          "usable": true,
+          "reason": null,
+          "max_gap_ms": 0.8
+        }
+      },
+      "edges": {
+        "rise": {
+          "signed_s": 0.007481463966437416,
+          "rms": 0.09142797912170027
+        },
+        "fall": {
+          "signed_s": -0.024868387556914895,
+          "rms": 0.10652343207186452
+        }
+      }
+    },
+    {
+      "band": "LOWER",
+      "flow": 18.0,
+      "pa": 0.042,
+      "repeat": 2,
+      "stage": "0.0005",
+      "file": "stock_pa_direct_d_ref_164524_420_L2.json",
+      "timing": {
+        "count": 3977,
+        "span_s": 3.178,
+        "median_interval_ms": 0.7995,
+        "max_interval_ms": 0.808,
+        "gaps_over_12_ms": 0,
+        "median_gap_ms": null
+      },
+      "quality": {
+        "rise": {
+          "usable": true,
+          "reason": null,
+          "max_gap_ms": 0.8
+        },
+        "fall": {
+          "usable": true,
+          "reason": null,
+          "max_gap_ms": 0.8
+        }
+      },
+      "edges": {
+        "rise": {
+          "signed_s": 0.02464255807109354,
+          "rms": 0.09401933417434916
+        },
+        "fall": {
+          "signed_s": 0.0022075336950238963,
+          "rms": 0.06907221139220575
+        }
+      }
+    }
+  ],
+  "completed": true,
+  "candidate": 0.042,
+  "assessment": {
+    "reason": "accepted"
+  },
+  "flow_sweeps": [
+    {
+      "peak_mm3_s": 18.0
+    },
+    {
+      "peak_mm3_s": 18.0
+    }
+  ],
+  "scores": [
+    {
+      "pa": 0.04,
+      "scores": [
+        0.38443514616050806,
+        0.07085037309304579,
+        0.09882502470007934,
+        0.08988735627910213
+      ],
+      "repeat_half_ranges": [
+        0.32147493707624525,
+        0.005580781415872052,
+        0.02073751377596631,
+        0.011899409070706975
+      ],
+      "lower_worst": 0.38443514616050806,
+      "peak_worst": 0.09882502470007934,
+      "lower_pass": false
+    },
+    {
+      "pa": 0.042,
+      "scores": [
+        0.08648008384527385,
+        0.08506218516418193,
+        0.10660456997858839,
+        0.0899511979624887
+      ],
+      "repeat_half_ranges": [
+        0.007539250329075306,
+        0.01598997377197619,
+        0.015176590856888127,
+        0.01657223410937582
+      ],
+      "lower_worst": 0.08648008384527385,
+      "peak_worst": 0.10660456997858839,
+      "lower_pass": true
+    },
+    {
+      "pa": 0.0425,
+      "scores": [
+        0.08725307772257763,
+        0.0818066284684994,
+        0.09514696502869383,
+        0.08984298719426712
+      ],
+      "repeat_half_ranges": [
+        0.013570283126591087,
+        0.029907253723756307,
+        0.0035988115256457287,
+        0.005611376264250505
+      ],
+      "lower_worst": 0.08725307772257763,
+      "peak_worst": 0.09514696502869383,
+      "lower_pass": true
+    },
+    {
+      "pa": 0.043,
+      "scores": [
+        0.0825290768832743,
+        0.0810396986018958,
+        0.11203404522882979,
+        0.1019731697293633
+      ],
+      "repeat_half_ranges": [
+        0.0019258461295523846,
+        0.007170301048597165,
+        0.01021313274207599,
+        0.018778855073170148
+      ],
+      "lower_worst": 0.0825290768832743,
+      "peak_worst": 0.11203404522882979,
+      "lower_pass": true
+    },
+    {
+      "pa": 0.045,
+      "scores": [
+        0.08438284424618578,
+        0.10384401016443587,
+        0.11912108873078131,
+        0.10106394756794068
+      ],
+      "repeat_half_ranges": [
+        0.030425919213257067,
+        0.003394073344940393,
+        0.003184039751737054,
+        0.0055199742319918185
+      ],
+      "lower_worst": 0.10384401016443587,
+      "peak_worst": 0.11912108873078131,
+      "lower_pass": false
+    },
+    {
+      "pa": 0.0475,
+      "scores": [
+        0.11378059023762822,
+        0.09226323654894775,
+        0.07997269176721727,
+        0.11833460069454535
+      ],
+      "repeat_half_ranges": [
+        0.003569423839027877,
+        0.0009724482469136639,
+        0.0015612248490385547,
+        0.0035273704608384873
+      ],
+      "lower_worst": 0.11378059023762822,
+      "peak_worst": 0.11833460069454535,
+      "lower_pass": false
+    },
+    {
+      "pa": 0.05,
+      "scores": [
+        0.10108123670221486,
+        0.11107539275741392,
+        0.12417679803880562,
+        0.1192486452667884
+      ],
+      "repeat_half_ranges": [
+        0.01048846548249762,
+        0.007893910477142704,
+        0.03787954582335144,
+        0.0005360210706566726
+      ],
+      "lower_worst": 0.11107539275741392,
+      "peak_worst": 0.12417679803880562,
+      "lower_pass": false
+    },
+    {
+      "pa": 0.055,
+      "scores": [
+        0.1217722073309025,
+        0.1272714199732057,
+        0.13868989573823737,
+        0.17089312009296043
+      ],
+      "repeat_half_ranges": [
+        0.012824968431222654,
+        0.0028000392620144907,
+        0.02486386055114022,
+        0.009988250356508896
+      ],
+      "lower_worst": 0.1272714199732057,
+      "peak_worst": 0.17089312009296043,
+      "lower_pass": false
+    },
+    {
+      "pa": 0.06,
+      "scores": [
+        0.14742888245176378,
+        0.17388007590309562,
+        0.18289368201575967,
+        0.25857626724142646
+      ],
+      "repeat_half_ranges": [
+        0.005217830213939109,
+        0.014503746038264653,
+        0.025059411215935856,
+        0.02940874125243094
+      ],
+      "lower_worst": 0.17388007590309562,
+      "peak_worst": 0.25857626724142646,
+      "lower_pass": false
+    }
+  ],
+  "selected_scores": [
+    0.08648008384527385,
+    0.08506218516418193,
+    0.10660456997858839,
+    0.0899511979624887
+  ],
+  "lower_limits": [
+    0.1025290768832743,
+    0.09085037309304579
+  ],
+  "peak_tie": 0.02,
+  "stock_handoff": {
+    "file": "stock_pa_orca_direct_handoff_164524.json",
+    "samples": 696,
+    "moves": 0,
+    "windows": 4,
+    "packets": 99
+  }
+}

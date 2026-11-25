@@ -20,7 +20,7 @@ BANDS = ("LOWER", "PEAK")
 EDGES = ("rise", "fall")
 
 
-def rank(captures, lower_limits=None, peak_tie=None):
+def rank(captures, lower_limits=None, peak_tie=None, *, bands=BANDS):
     values = {}
     for capture in captures:
         if all(capture["edges"].get(edge) is not None for edge in EDGES):
@@ -28,18 +28,28 @@ def rank(captures, lower_limits=None, peak_tie=None):
                 key = (capture["pa"], capture["band"], edge)
                 values.setdefault(key, []).append(capture["edges"][edge]["rms"])
     rows = []
-    conditions = [(band, edge) for band in BANDS for edge in EDGES]
+    conditions = [(band, edge) for band in bands for edge in EDGES]
     for pa in sorted({capture["pa"] for capture in captures}):
         repeats = [values.get((pa, band, edge), []) for band, edge in conditions]
         if min(map(len, repeats)) < 2:
             continue
         medians = [statistics.median(scores) for scores in repeats]
         noise = [(max(scores) - min(scores)) / 2 for scores in repeats]
-        rows.append({"pa": pa, "scores": medians, "repeat_half_ranges": noise,
-                     "lower_worst": max(medians[:2]), "peak_worst": max(medians[2:])})
+        row = {"pa": pa, "scores": medians, "repeat_half_ranges": noise}
+        if len(bands) == 1:
+            row["worst"] = max(medians)
+        else:
+            row.update(lower_worst=max(medians[:2]), peak_worst=max(medians[2:]))
+        rows.append(row)
     if not rows:
         return rows, None, None, None
-    repeat_noise = [statistics.median(row["repeat_half_ranges"][i] for row in rows) for i in range(4)]
+    repeat_noise = [statistics.median(row["repeat_half_ranges"][i] for row in rows)
+                    for i in range(len(conditions))]
+    if len(bands) == 1:
+        best = min(row["worst"] for row in rows)
+        tie = max(LOWER_SCORE_TIE, *repeat_noise)
+        winner = next(row for row in rows if row["worst"] <= best + tie)
+        return rows, winner, None, None
     allowances = [max(CLOSE_SCORE, noise) for noise in repeat_noise]
     if lower_limits is None:
         lower_limits = [min(row["scores"][i] for row in rows) + allowances[i] for i in range(2)]
@@ -61,6 +71,7 @@ def rank(captures, lower_limits=None, peak_tie=None):
 
 def measure(sweep, flows, stamp, report, confirmation=None, update=print, diameter=1.75, extended_stroke=False):
     captures = report["captures"]
+    bands = tuple(flows)
     prime_mm = report["prime_mm_per_stroke"]
     sweep.check_position(sweep.status())
     sweep.send(limit_command(CALIBRATION_LIMITS), "G90", "M83", "M220 S100", "M221 S100",
@@ -72,7 +83,7 @@ def measure(sweep, flows, stamp, report, confirmation=None, update=print, diamet
     for settings, step in stages:
         stage = f"{step / 10000:.4f}" + (" confirmation" if confirmation is not None else "")
         if settings is None:
-            rows, winner, lower_limits, _ = rank(captures)
+            rows, winner, lower_limits, _ = rank(captures, bands=bands)
             if not rows:
                 return
             if winner is None:
@@ -94,8 +105,8 @@ def measure(sweep, flows, stamp, report, confirmation=None, update=print, diamet
                 sweep.check_cancel()
                 if report["captures"]:
                     sweep.wipe()
-                bands = BANDS if repeat == 1 else tuple(reversed(BANDS))
-                for band in bands:
+                order_bands = bands if repeat == 1 else reversed(bands)
+                for band in order_bands:
                     sweep.check_cancel()
                     current = sweep.status()
                     if not sweep.idle(current):

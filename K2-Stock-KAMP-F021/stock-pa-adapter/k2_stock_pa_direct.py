@@ -11,6 +11,8 @@ from collections import deque
 from pathlib import Path
 from typing import NamedTuple
 
+from .adaptive_pa_motion import CAPABILITY, CENTER_Y, COMMAND, END_X, MAX_PA, START_X, stroke_segments
+from .adaptive_pa_motion import MAX_ACCEL, MAX_LAYER_Z, MIN_ACCEL, PRINT_CAPABILITY, PRINT_COMMAND, ring_gcode, wall_ring
 from .k2_stock_pa_zip import unzip_data
 
 
@@ -22,6 +24,8 @@ PRESSURE = "resault_prtouch_pres"
 GAP_SECONDS = .012
 SENT = re.compile(r"^Sent \d+ (.+)$")
 STROKE_PROFILES = {"PETG": ("000003", (230, 240)), "ABS": ("000004", (280,))}
+# Creality's own ABS reports 007001 while the generic ABS reports 000004. Both use the ABS profile.
+EQUIVALENT_CODES = {"000004": ("000004", "007001")}
 PA_STROKE_LIMIT = 24.
 MAX_TEST_FLOW = 32
 SUSTAIN_SECONDS = 120
@@ -38,6 +42,8 @@ MAP_FLOWS = {
 MAP_SECONDS = 20
 CURRENT_PROBE_SECONDS = 16
 CURRENT_PROBE_MIN_FLOW = 8
+ABS_06_CEILING = 48
+ABS_06_SUPPORT = f"{ABS_06_CEILING} mm3/s for 0.6 mm ABS"
 STOCK_E_BRIDGE_OID = 1  # Observed in the F021 stock extruder protection replies.
 MOTOR_CURRENT_QUERY = bytes.fromhex("f7 81 04 00 08 08 c8")
 
@@ -163,9 +169,11 @@ class StockDirectPressure:
         self.gcode.register_command("STOCK_PA_DIRECT_TEST", self.cmd_TEST,
                                     desc="Benchmark the stock nozzle MCU pressure buffer with the printer stationary")
         self.gcode.register_command("STOCK_PA_DIRECT_STROKE", self.cmd_STROKE,
-                                    desc="Capture a bounded pressure stroke including a measured Max Flow peak")
+                                    desc=f"Capture a bounded pressure stroke including a measured Max Flow peak ({ABS_06_SUPPORT})")
         self.gcode.register_command("STOCK_PA_DIRECT_PA_STROKE", self.cmd_STROKE,
                                     desc="Capture a continuous pressure stroke for the selected CFS slot")
+        self.gcode.register_command(COMMAND, self.cmd_WALL_STROKE, desc=CAPABILITY)
+        self.gcode.register_command(PRINT_COMMAND, self.cmd_PRINT_WALL, desc=PRINT_CAPABILITY)
         self.gcode.register_command("STOCK_PA_DIRECT_FLOW", self.cmd_FLOW,
                                     desc="Capture a two-second extrusion-only flow probe over the purge chute")
         self.gcode.register_command("STOCK_PA_DIRECT_SUSTAIN", self.cmd_SUSTAIN,
@@ -177,10 +185,10 @@ class StockDirectPressure:
         self.gcode.register_command("STOCK_PA_DIRECT_MAP", self.cmd_MAP,
                                     desc="Map pressure and E current for slot D ABS or slot A/B/C PETG with 16- or 20-second steps")
         self.gcode.register_command("STOCK_PA_DIRECT_CURRENT_FLOW", self.cmd_CURRENT_FLOW,
-                                    desc="Measure servo current in all CFS slots during a 16-second flow step (minimum %d mm3/s)"
-                                    % CURRENT_PROBE_MIN_FLOW)
+                                    desc=("Measure servo current in all CFS slots during a 16-second flow step "
+                                          f"(minimum {CURRENT_PROBE_MIN_FLOW} mm3/s, {ABS_06_SUPPORT})"))
 
-    def check_idle(self, gcmd, nozzle_target=0):
+    def check_idle(self, gcmd, nozzle_target=0, bed_target=0):
         stats = self.printer.lookup_object("print_stats")
         sdcard = self.printer.lookup_object("virtual_sdcard")
         pause = self.printer.lookup_object("pause_resume")
@@ -193,8 +201,8 @@ class StockDirectPressure:
             planned, current, empty = toolhead.check_busy(now)
             if (stats.state not in ("standby", "complete", "cancelled") or sdcard.is_active()
                     or pause.get_status(now)["is_paused"] or not empty
-                    or bed.get_status(now)["target"] or nozzle.get_status(now)["target"] != nozzle_target):
-                raise gcmd.error("The direct pressure benchmark requires an idle printer, the bed off, and the expected nozzle target.")
+                    or bed.get_status(now)["target"] != bed_target or nozzle.get_status(now)["target"] != nozzle_target):
+                raise gcmd.error("The direct pressure benchmark requires an idle printer with the expected bed and nozzle targets.")
             if planned <= current + .02:
                 return
             if now >= deadline:
@@ -329,6 +337,11 @@ class StockDirectPressure:
         return slot, material_code, target, diameter
 
     def probe_ceiling(self, slot, material, target):
+        if (material, target) == ("000004", 280):
+            toolhead = self.printer.lookup_object("toolhead")
+            extruder = toolhead.get_extruder().get_status(self.reactor.monotonic())
+            if math.isclose(extruder.get("nozzle_diameter", 0), .6, rel_tol=0, abs_tol=1e-6):
+                return ABS_06_CEILING
         reference_slot = "D" if material == STROKE_PROFILES["ABS"][0] else ("C" if slot == "C" else "A")
         flows = MAP_FLOWS.get((reference_slot, material, target))
         return flows[-1] if flows else None
@@ -377,6 +390,132 @@ class StockDirectPressure:
 
         self.check_purge_position(gcmd, slot, material_code, target)
         self.benchmark(gcmd, 1, True, stroke, feeds, nozzle_target=target)
+
+    def cmd_WALL_STROKE(self, gcmd):
+        slot, material, target, diameter = self.flow_profile(gcmd)
+        limit = self.probe_ceiling(slot, material, target) or PA_STROKE_LIMIT
+        flow = gcmd.get_float("FLOW", above=0., maxval=limit)
+        speed = gcmd.get_float("SPEED", above=0.)
+        acceleration = gcmd.get_float("ACCEL", above=0.)
+        now = self.reactor.monotonic()
+        toolhead = self.printer.lookup_object("toolhead")
+        head = toolhead.get_status(now)
+        pa = toolhead.get_extruder().get_status(now)["pressure_advance"]
+        settings = self.printer.lookup_object("configfile").get_status(now)["settings"]
+        extruder = settings["extruder"]
+        bottom = min(float(self.printer.lookup_object("gcode_macro PRINTER_PARAM")
+                           .get_status(now)["max_z_position"]), head["axis_maximum"][2])
+        try:
+            segments = stroke_segments(flow, speed, acceleration, diameter)
+        except ValueError as error:
+            raise gcmd.error(str(error))
+        if (not math.isclose(diameter, extruder["filament_diameter"], rel_tol=.005)
+                or flow / speed > extruder["max_extrude_cross_section"]
+                or not 0 <= pa <= MAX_PA
+                or speed > head["max_velocity"] or acceleration > settings["printer"]["max_accel"]
+                or not head["axis_minimum"][0] <= START_X < END_X <= head["axis_maximum"][0]
+                or not head["axis_minimum"][1] <= CENTER_Y <= head["axis_maximum"][1]):
+            raise gcmd.error("The adaptive PA stroke exceeds the live motion or extrusion limits.")
+
+        def check_position():
+            x, y, z, _ = toolhead.get_position()
+            if not START_X - .05 <= x <= END_X + .05 or abs(y - CENTER_Y) > .05 or abs(z - bottom) > .20:
+                raise gcmd.error("Adaptive PA requires the centerline and the lowest configured bed position.")
+            self.check_extrusion_state(gcmd, slot, material, target)
+
+        self.check_idle(gcmd, target)
+        check_position()
+        move = self.printer.lookup_object("gcode_move").get_status(now)
+        offset_x = move["position"][0] - move["gcode_position"][0]
+        filament_area = math.pi * (diameter / 2) ** 2
+        feeds = [flow * ratio / filament_area for ratio in (.35, 1., .35)]
+        commands = []
+        x = START_X
+        for length, velocity, extrusion in segments:
+            x += length
+            commands.append(f"G1 X{x - offset_x:.6f} E{extrusion:.6f} F{velocity * 60:.6f}")
+
+        def stroke():
+            check_position()
+            self.gcode.run_script_from_command("\n".join(commands + ["M400"]))
+
+        self.gcode.run_script_from_command("SAVE_GCODE_STATE NAME=k2_pa_wall_stroke")
+        try:
+            self.gcode.run_script_from_command("\n".join(("G90", "M83", "M220 S100", "M221 S100",
+                f"G1 X{START_X - offset_x:.6f} F2400", "M400",
+                f"SET_VELOCITY_LIMIT ACCEL={acceleration:.8g} ACCEL_TO_DECEL={acceleration:.8g}")))
+            self.benchmark(gcmd, 1, True, stroke, feeds, nozzle_target=target, stream=True,
+                           planned={"xy_speed": speed, "xy_acceleration": acceleration})
+        finally:
+            self.gcode.run_script_from_command(
+                f"SET_VELOCITY_LIMIT ACCEL={head['max_accel']:.12g} "
+                f"ACCEL_TO_DECEL={head['max_accel_to_decel']:.12g}\n"
+                "RESTORE_GCODE_STATE NAME=k2_pa_wall_stroke MOVE=0")
+
+    def cmd_PRINT_WALL(self, gcmd):
+        slot, material, target, diameter = self.flow_profile(gcmd)
+        limit = self.probe_ceiling(slot, material, target) or PA_STROKE_LIMIT
+        flow = gcmd.get_float("FLOW", above=0., maxval=limit)
+        speed = gcmd.get_float("SPEED", above=0.)
+        accel = gcmd.get_float("ACCEL", minval=MIN_ACCEL, maxval=MAX_ACCEL)
+        corner = gcmd.get_float("CORNER", minval=0., maxval=25.)
+        z = gcmd.get_float("Z", minval=.14, maxval=MAX_LAYER_Z)
+        bed_target = gcmd.get_int("BED", minval=45, maxval=100)
+        if not (MIN_ACCEL <= accel <= MAX_ACCEL and 0 <= corner <= 25. and .14 <= z <= MAX_LAYER_Z):
+            raise gcmd.error("Use finite tower acceleration, corner speed and height.")
+        try:
+            (x, y), moves = wall_ring(gcmd.get_float("SPAN"), gcmd.get_float("INSET", minval=0.),
+                                      flow, speed, diameter)
+        except ValueError as error:
+            raise gcmd.error(str(error))
+        now = self.reactor.monotonic()
+        toolhead = self.printer.lookup_object("toolhead")
+        head = toolhead.get_status(now)
+        settings = self.printer.lookup_object("configfile").get_status(now)["settings"]
+        ext = settings["extruder"]
+        pa = toolhead.get_extruder().get_status(now)["pressure_advance"]
+        if (not math.isclose(diameter, ext["filament_diameter"], rel_tol=.005)
+                or flow / speed > ext["max_extrude_cross_section"] or not 0 <= pa <= MAX_PA
+                or speed > head["max_velocity"] or accel > settings["printer"]["max_accel"]):
+            raise gcmd.error("The tower wall exceeds the live motion or extrusion limits.")
+
+        def check_position():
+            eventtime = self.reactor.monotonic()
+            self.check_extrusion_state(gcmd, slot, material, target)
+            position = self.printer.lookup_object("gcode_move").get_status(eventtime)
+            if (any(abs(a - b) > .015 for a, b in zip(position["gcode_position"], (x, y, z)))
+                    or any(abs(value) > .001 for value in position["homing_origin"][:3])):
+                raise gcmd.error("Move to the verified wall seam and layer height first.")
+            mesh = self.printer.lookup_object("bed_mesh").get_status(eventtime)
+            if (not mesh["profile_name"]
+                    or any(any(not lo <= value <= hi for value, lo, hi in zip(point, mesh["mesh_min"], mesh["mesh_max"]))
+                           for point in [(x, y), *(move[:2] for move in moves)])):
+                raise gcmd.error("The tower wall requires an active bed mesh covering the test.")
+            bed = self.printer.lookup_object("heaters").lookup_heater("heater_bed").get_status(eventtime)
+            if bed["target"] != bed_target or abs(bed["temperature"] - bed_target) > 5:
+                raise gcmd.error("The bed is outside the printed wall target range.")
+
+        def stroke():
+            check_position()
+            self.gcode.run_script_from_command("\n".join(ring_gcode(moves, speed) + ["M400"]))
+
+        self.check_idle(gcmd, target, bed_target)
+        check_position()
+        self.gcode.run_script_from_command("SAVE_GCODE_STATE NAME=k2_pa_print_wall")
+        try:
+            self.gcode.run_script_from_command(
+                f"G90\nM83\nM220 S100\nM221 S100\nSET_VELOCITY_LIMIT ACCEL={accel:.8g} "
+                f"ACCEL_TO_DECEL={accel:.8g} SQUARE_CORNER_VELOCITY={corner:.8g}")
+            self.benchmark(gcmd, 1, True, stroke, nozzle_target=target, bed_target=bed_target,
+                           lead_seconds=.35, stream=True, planned={"wall_flow_mm3_s": flow,
+                           "xy_speed": speed, "xy_acceleration": accel, "xy_corner_velocity": corner,
+                           "filament_diameter_mm": diameter, "z": z})
+        finally:
+            self.gcode.run_script_from_command(
+                f"SET_VELOCITY_LIMIT ACCEL={head['max_accel']:.12g} "
+                f"ACCEL_TO_DECEL={head['max_accel_to_decel']:.12g} "
+                f"SQUARE_CORNER_VELOCITY={head['square_corner_velocity']:.12g}\n"
+                "RESTORE_GCODE_STATE NAME=k2_pa_print_wall MOVE=0")
 
     def cmd_FLOW(self, gcmd):
         slot, material_code, target, diameter = self.flow_profile(gcmd)
@@ -579,7 +718,8 @@ class StockDirectPressure:
         if (toolhead.get_status(now)["homed_axes"] != "xyz" or abs(nozzle["temperature"] - target) > 5
                 or nozzle["target"] != target or box["state"] != "connect"
                 or box["map"][address] != address or box["T1"]["filament"] != slot
-                or box["T1"]["material_type"][index] != material_code or not filament["filament_detected"]):
+                or box["T1"]["material_type"][index] not in EQUIVALENT_CODES.get(material_code, (material_code,))
+                or not filament["filament_detected"]):
             raise gcmd.error("The extrusion stroke requires XYZ homed and the selected material from slot %s at %d °C."
                              % (slot, target))
 
@@ -600,9 +740,9 @@ class StockDirectPressure:
         return path
 
     def benchmark(self, gcmd, windows, continuous, stroke=None, feeds=None, nozzle_target=0, lead_seconds=.12,
-                  stream=False, motor_current=False, planned=None):
+                  stream=False, motor_current=False, planned=None, bed_target=0):
         name = self.capture_name(gcmd)
-        self.check_idle(gcmd, nozzle_target)
+        self.check_idle(gcmd, nozzle_target, bed_target)
         mcu = self.printer.lookup_object("mcu nozzle_mcu")
         try:
             seen = set(sent_frames(mcu._serial))
@@ -614,7 +754,7 @@ class StockDirectPressure:
                 logging.info("Stock pressure command trace: %s",
                              [frame for frame in frames if "_prtouch_pres " in frame])
                 raise
-            self.check_idle(gcmd, nozzle_target)
+            self.check_idle(gcmd, nozzle_target, bed_target)
             motion = self.printer.lookup_object("motion_report").trapqs["extruder"] if stroke else None
             motor = StockExtruderCurrent(mcu, self.reactor) if motor_current else None
             samples, new_counts, streamed_moves, errors = self.collect(

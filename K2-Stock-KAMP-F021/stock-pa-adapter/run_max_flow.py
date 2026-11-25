@@ -14,18 +14,25 @@ MIN_FLOW = 8
 STEP_SECONDS = 16
 CURRENT_CUTOFF = 1.0
 MAX_PROBES = 8
+ABS_06_CEILING = 48
+ABS_06_SUPPORT = f"{ABS_06_CEILING} mm3/s for 0.6 mm ABS"
 # Approximate slopes around the threshold in the archived stock PETG and ABS sweeps.
 ESTIMATED_SLOPE = {"PETG": .05, "ABS": .04}
+# The 0.6 mm ABS trace rose by about .0225 per mm³/s over 15–39 and .06 near 39.
+ABS_06_SLOPE = .0225
+ABS_06_REFERENCE = (39, .06)
 
 
-def probe_ceiling(slot, material):
+def probe_ceiling(slot, material, nozzle_mm=.4):
     if slot not in ("A", "B", "C", "D") or material not in ESTIMATED_SLOPE:
         raise ValueError("Auto Max Flow supports ABS or PETG in CFS unit 1.")
+    if material == "ABS" and nozzle_mm == .6:
+        return ABS_06_CEILING
     reference_slot = "D" if material == "ABS" else ("C" if slot == "C" else "A")
     return MAP_FLOWS[reference_slot][-1]
 
 
-def search_current(probe, ceiling, slope):
+def search_current(probe, ceiling, slope, reference=None):
     currents = {}
 
     def measure(flow):
@@ -33,19 +40,33 @@ def search_current(probe, ceiling, slope):
             currents[flow] = probe(flow)
         return currents[flow]
 
+    def estimate_below(flow, iq, slope, end):
+        crossing = flow + (CURRENT_CUTOFF - iq) / slope
+        return min(end, max(flow + 1, math.ceil(crossing) - 1))
+
     first = measure(START_FLOW)
     if first >= CURRENT_CUTOFF:
         flow = START_FLOW - 1
     else:
-        estimate = START_FLOW + (CURRENT_CUTOFF - first) / slope
-        flow = min(ceiling - 1, max(START_FLOW + 1, math.ceil(estimate) - 1))
+        initial_limit = reference[0] if reference else ceiling - 1
+        flow = estimate_below(START_FLOW, first, slope, initial_limit)
     check_dip = True
     while flow in currents or len(currents) < MAX_PROBES:
-        above = measure(flow) >= CURRENT_CUTOFF
+        if (len(currents) >= MAX_PROBES - 2 and flow not in currents
+                and all(iq < CURRENT_CUTOFF for iq in currents.values())):
+            # Reserve the final two probes for the top adjacent pair if the search is still below cutoff.
+            top_pair = ceiling - (MAX_PROBES - 1 - len(currents))
+            if flow < top_pair and top_pair not in currents:
+                flow = top_pair
+        iq = measure(flow)
+        above = iq >= CURRENT_CUTOFF
         if not above and flow == ceiling:
             return {"reason": "current_below_threshold"}
         if above and flow == MIN_FLOW:
             break
+        if not above and reference and flow == reference[0] and len(currents) == 2:
+            flow = estimate_below(flow, iq, reference[1], min(flow + 4, ceiling - 1))
+            continue
 
         adjacent = flow - 1 if above else flow + 1
         if adjacent in currents and (currents[adjacent] >= CURRENT_CUTOFF) != above:
@@ -72,11 +93,12 @@ class UnusableCurrent(ValueError):
 
 
 class MaxFlowRun:
-    def __init__(self, sweep, diameter, update, extruder):
+    def __init__(self, sweep, diameter, update, extruder, *, nozzle_mm=.4):
         self.sweep = sweep
         self.diameter = diameter
         self.update = update
-        self.ceiling = probe_ceiling(sweep.slot, sweep.material)
+        self.nozzle_mm = nozzle_mm
+        self.ceiling = probe_ceiling(sweep.slot, sweep.material, nozzle_mm)
         check_extrusion_limits(diameter, extruder, self.ceiling, STEP_SECONDS)
         self.started_capture = False
 
@@ -110,9 +132,11 @@ class MaxFlowRun:
     def run(self, preset):
         sweep = self.sweep
         name = f"maxflow_{uuid4().hex[:12]}"
-        slope = ESTIMATED_SLOPE[sweep.material]
+        expanded_abs = self.nozzle_mm == .6 and sweep.material == "ABS"
+        slope = ABS_06_SLOPE if expanded_abs else ESTIMATED_SLOPE[sweep.material]
+        reference = ABS_06_REFERENCE if expanded_abs else None
         report = {
-            "slot": f"1{sweep.slot}", "material": sweep.material, "nozzle_mm": .4,
+            "slot": f"1{sweep.slot}", "material": sweep.material, "nozzle_mm": self.nozzle_mm,
             "temperature_c": sweep.temperature, "preset_mm3_s": preset,
             "start_mm3_s": START_FLOW, "planned_min_mm3_s": MIN_FLOW,
             "planned_max_mm3_s": self.ceiling, "tested_through_mm3_s": 0,
@@ -121,6 +145,8 @@ class MaxFlowRun:
             "current_cutoff": CURRENT_CUTOFF, "boundary_mm3_s": None, "recommended_mm3_s": None,
             "steps": [], "capture": f"{name}_summary.json",
         }
+        if reference:
+            report.update(reference_mm3_s=reference[0], reference_iq_per_mm3_s=reference[1])
 
         def probe(flow):
             return self.probe(report, f"{name}_{len(report['steps']) + 1}", flow)
@@ -130,7 +156,7 @@ class MaxFlowRun:
             move_to_flow_position(sweep)
             sweep.check_cancel()
             sweep.send("SET_PRESSURE_ADVANCE ADVANCE=0", "M400")
-            report.update(search_current(probe, self.ceiling, slope))
+            report.update(search_current(probe, self.ceiling, slope, reference))
         except UnusableCurrent as exc:
             report.update(reason="unusable_current", unusable_flow_mm3_s=exc.flow)
         except Exception as exc:

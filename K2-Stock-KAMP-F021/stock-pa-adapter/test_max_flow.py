@@ -35,6 +35,8 @@ class MaxFlowTest(unittest.TestCase):
         self.assertEqual(probe_ceiling("A", "PETG"), 29)
         self.assertEqual(probe_ceiling("C", "PETG"), 30)
         self.assertEqual(probe_ceiling("C", "ABS"), 40)
+        self.assertEqual(probe_ceiling("C", "ABS", .6), 48)
+        self.assertEqual(probe_ceiling("C", "PETG", .6), 30)
         with self.assertRaisesRegex(RuntimeError, "diameter"):
             MaxFlowRun(sweep, 2.85, Mock(), EXTRUDER)
         with self.assertRaisesRegex(RuntimeError, "extrusion-only"):
@@ -61,9 +63,13 @@ class MaxFlowTest(unittest.TestCase):
 
     def test_budget_and_ceiling_without_an_adjacent_crossing(self):
         low = Mock(return_value=.99)
-        self.assertEqual(search_current(low, 29, .05)["reason"], "unbracketed_current")
+        self.assertEqual(search_current(low, 29, .05)["reason"], "current_below_threshold")
         self.assertEqual(low.call_count, MAX_PROBES)
+        self.assertEqual(low.call_args.args, (29,))
         self.assertEqual(search_current(lambda _flow: .1, 29, .05)["reason"], "current_below_threshold")
+        top = search_current(lambda flow: 1.01 if flow == 29 else .99, 29, .05)
+        self.assertEqual(top["recommended_mm3_s"], 29)
+        self.assertEqual(top["below_cutoff_mm3_s"], 28)
         hit = Mock(return_value=1.)
         self.assertEqual(search_current(hit, 29, .05)["reason"], "unbracketed_current")
         self.assertEqual([call.args[0] for call in hit.call_args_list], list(range(15, MIN_FLOW - 1, -1)))
@@ -76,13 +82,25 @@ class MaxFlowTest(unittest.TestCase):
         self.assertEqual(result["below_cutoff_mm3_s"], 13)
         self.assertEqual(result["below_cutoff_median_abs_iq"], .99995)
 
+    def test_abs_06_checks_the_top_of_the_measured_range_first(self):
+        with tempfile.TemporaryDirectory() as folder, patch("run_max_flow.move_to_flow_position"):
+            sweep = Mock(folder=Path(folder), slot="D", material="ABS", temperature=280)
+            run = MaxFlowRun(sweep, 1.75, Mock(), EXTRUDER, nozzle_mm=.6)
+            # The 15 and 39 readings come from the 0.6 mm run. The higher readings simulate a cutoff.
+            readings = {15: .2476, 39: .7883, 42: .94, 43: 1.01, 41: .91}
+            with patch.object(run, "probe", side_effect=lambda _report, _name, flow: readings[flow]) as probe:
+                result = run.run(18)
+            self.assertEqual([call.args[2] for call in probe.call_args_list], [15, 39, 42, 43, 41])
+            self.assertEqual(result["recommended_mm3_s"], 43)
+            self.assertEqual(result["below_cutoff_mm3_s"], 42)
+
     def test_run_sends_one_bounded_probe_at_a_time_and_saves_captures(self):
         with tempfile.TemporaryDirectory() as folder, patch("run_max_flow.move_to_flow_position") as move:
             sweep = Mock(folder=Path(folder), slot="A", material="PETG", temperature=240)
             traces = {15: .69, 20: .93, 21: .98, 22: 1.01}
             flows = iter((15, 21, 22, 20))
             sweep.read.side_effect = lambda *_, **_opts: capture((next(flows),), traces.__getitem__)
-            result = MaxFlowRun(sweep, 1.75, Mock(), EXTRUDER).run(24)
+            result = MaxFlowRun(sweep, 1.75, Mock(), EXTRUDER, nozzle_mm=.6).run(24)
             move.assert_called_once_with(sweep)
             self.assertEqual(result["recommended_mm3_s"], 22)
             self.assertEqual(result["tested_through_mm3_s"], 22)
@@ -90,7 +108,8 @@ class MaxFlowTest(unittest.TestCase):
             commands = [call.args[0] for call in sweep.send.call_args_list[1:]]
             self.assertEqual([int(re.search(r"FLOW=(\d+)", command)[1]) for command in commands], [15, 21, 22, 20])
             self.assertTrue(all(command.startswith(COMMAND + " NAME=") for command in commands))
-            self.assertEqual(json.loads((sweep.folder / result["capture"]).read_text())["slot"], "1A")
+            saved = json.loads((sweep.folder / result["capture"]).read_text())
+            self.assertEqual((saved["slot"], saved["nozzle_mm"]), ("1A", .6))
             self.assertTrue(all((sweep.folder / row["capture"]).is_file() for row in result["steps"]))
 
     def test_bad_motor_samples_stop_the_search(self):
@@ -127,22 +146,34 @@ class MaxFlowTest(unittest.TestCase):
             prepare.assert_called_once_with(sweep, state, recover_unassigned=True)
 
     def test_combined_run_uses_measured_pa_peak_instead_of_preset(self):
-        payload = {**PAYLOAD, "slot": "1C", "kind": "flow_then_pa", "outer_wall_flow_mm3_s": 25.0,
+        payload = {**PAYLOAD, "slot": "1C", "kind": "flow_then_pa", "nozzle_mm": .6, "outer_wall_flow_mm3_s": 25.0,
                    "inner_wall_flow_mm3_s": 20.0}
         check_request(payload, PAYLOAD["printer"])
-        for measured in (18, 23, 33):
+        for measured in (18, 23, 33, 48):
             max_flow = {"recommended_mm3_s": measured}
             pa = {"candidate": .057}
             with patch("orca_auto_pa.run_calibration", side_effect=[max_flow, pa]) as run:
                 result = run_job(PAYLOAD["printer"], Path.cwd(), payload, threading.Event(), Mock())
             self.assertEqual([call.args[2]["kind"] for call in run.call_args_list], ["max_flow", "pressure_advance"])
             self.assertTrue(all(call.args[2]["slot"] == "1C" for call in run.call_args_list))
+            self.assertTrue(all(call.args[2]["nozzle_mm"] == .6 for call in run.call_args_list))
             self.assertEqual(run.call_args.args[2]["max_flow_mm3_s"], measured)
             self.assertEqual(run.call_args.args[2]["lower_flow_mm3_s"], min(20.0, measured))
             self.assertEqual(check_request(run.call_args.args[2], PAYLOAD["printer"]), ("C", "ABS"))
             self.assertEqual(result["pa_peak_mm3_s"], measured)
             self.assertEqual(result["max_flow"], max_flow)
             self.assertEqual(result["pressure_advance"], pa)
+
+    def test_06_abs_requires_expanded_firmware_before_flow(self):
+        payload = {**PAYLOAD, "nozzle_mm": .6}
+        state = {"extruder": {"target": 0, "nozzle_diameter": .6}, "heater_bed": {"target": 0}}
+        with patch("orca_auto_pa.Sweep") as factory:
+            sweep = factory.return_value
+            sweep.status.return_value = state
+            sweep.read.return_value = {"result": COMMANDS}
+            with self.assertRaisesRegex(RuntimeError, "Update the printer adapter"):
+                run_calibration(f"http://{PAYLOAD['printer']}:7125", Path.cwd(), payload, threading.Event(), Mock())
+            sweep.send.assert_not_called()
 
     def test_standalone_pa_accepts_preset_peak_within_adapter_range(self):
         payload = {**PAYLOAD, "slot": "1C", "kind": "pressure_advance", "reader": "continuous",

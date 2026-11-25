@@ -3,8 +3,8 @@
 # dependencies = []
 # [tool.orcaslicer.plugin]
 # name = "K2 Calibration"
-# description = "Run Auto Max Flow and Auto Pressure Advance on the Creality K2."
-# version = "1.3.2"
+# description = "Run Auto Max Flow, Auto PA and Adaptive PA on the Creality K2."
+# version = "1.6.2"
 # ///
 
 import http.client
@@ -19,7 +19,8 @@ import orca
 
 
 COMPANION_PORT = 8766
-MODES = {"max_flow": "Auto Max Flow", "pressure_advance": "Auto PA", "flow_then_pa": "Max Flow then PA"}
+MODES = {"max_flow": "Auto Max Flow", "pressure_advance": "Auto PA",
+         "flow_then_pa": "Max Flow then PA", "adaptive_pa": "Adaptive PA"}
 
 
 PAGE = """<!doctype html>
@@ -51,6 +52,7 @@ PAGE = """<!doctype html>
   <div class="actions">
     <button type="button" id="flow">Auto Max Flow</button>
     <button type="button" id="pa">Auto PA</button>
+    <button type="button" id="adaptive">Adaptive PA</button>
     <button type="button" id="both">Max Flow then PA</button>
   </div>
   <div class="actions">
@@ -85,10 +87,12 @@ PAGE = """<!doctype html>
   function updateButtons() {
     const slot = state.slots.find(s => s.slot === el('slot').value);
     const preset = chosenPreset();
-    const ready = !state.busy && state.printer && slot && preset && !preset.issue && slot.material === preset.material;
+    const ready = !state.busy && state.calibration_supported && state.printer &&
+      slot && preset && !preset.issue && slot.material === preset.material;
     const flow = ready && slot.max_flow && preset.temperature === (preset.material === 'PETG' ? 240 : 280);
     el('flow').disabled = !flow;
     el('pa').disabled = !ready || preset.adaptive;
+    el('adaptive').disabled = !ready || !state.adaptive_supported;
     el('both').disabled = !flow || preset.adaptive;
     el('preset').disabled = state.busy || !state.profiles.length;
     el('slot').disabled = state.busy || !preset || Boolean(preset.issue);
@@ -98,7 +102,8 @@ PAGE = """<!doctype html>
   }
   el('preset').onchange = () => updateSlots('');
   el('slot').onchange = updateButtons;
-  for (const [id, mode] of Object.entries({flow:'max_flow', pa:'pressure_advance', both:'flow_then_pa'})) {
+  for (const [id, mode] of Object.entries({flow:'max_flow', pa:'pressure_advance',
+                                           adaptive:'adaptive_pa', both:'flow_then_pa'})) {
     el(id).onclick = () => {
       send('start', {mode, preset:el('preset').value, slot:el('slot').value});
     };
@@ -107,7 +112,8 @@ PAGE = """<!doctype html>
   window.orca.onMessage(message => {
     const oldPreset = el('preset').value, oldSlot = el('slot').value;
     state = message;
-    el('printer').textContent = state.printer ? 'Creality K2 · ' + state.printer : 'K2 companion unavailable';
+    const printer = state.printer ? 'Creality K2 · ' + state.printer : 'K2 companion unavailable';
+    el('printer').textContent = printer + (state.nozzle ? ' · ' + state.nozzle + ' mm nozzle' : '');
     el('preset').replaceChildren();
     for (const p of state.profiles) {
       const temperature = p.temperature ? ' · ' + p.temperature + ' °C' : '';
@@ -146,7 +152,9 @@ def scalar(value):
     return value[0] if isinstance(value, (list, tuple)) else value
 
 
-def calibration_profile(preset, edited, assigned):
+def calibration_profile(preset, edited):
+    if not preset.is_compatible:
+        raise ValueError("Select a filament preset compatible with the active printer and nozzle.")
     if edited.name == preset.name and edited.is_dirty:
         raise ValueError(f"Save the changes to {preset.name} before calibrating.")
 
@@ -159,14 +167,13 @@ def calibration_profile(preset, edited, assigned):
     current_flow = float(value("filament_max_volumetric_speed"))
     if material not in ("PETG", "ABS") or temperature not in ({"PETG": (230, 240), "ABS": (280,)}[material]):
         raise ValueError("Auto calibration supports PETG at 230–240 °C or ABS at 280 °C.")
-    if not preset.is_compatible and not assigned:
-        raise ValueError("This preset is for a different printer or nozzle. Select a compatible K2 preset.")
     if not all(math.isfinite(v) and v > 0 for v in (diameter, current_flow)):
         raise ValueError("Set a valid filament diameter and maximum volumetric speed.")
     adaptive = value("adaptive_pressure_advance")
     return {"name": preset.name, "file": preset.file, "material": material,
             "temperature": temperature, "diameter": diameter, "flow": current_flow,
             "pa": value("pressure_advance"), "enabled": value("enable_pressure_advance"),
+            "adaptive_model": value("adaptive_pressure_advance_model"),
             "adaptive": adaptive in (True, 1, "1", "true")}
 
 
@@ -174,8 +181,7 @@ def get_profile(bundle, name):
     preset = bundle.filaments.find_preset(name)
     if preset is None or preset.name != name or not preset.is_user() or not preset.file:
         raise ValueError("Select a saved user filament preset.")
-    assigned = any(p is not None and p.name == name for p in bundle.current_filament_presets())
-    return calibration_profile(preset, bundle.filaments.edited_preset(), assigned)
+    return calibration_profile(preset, bundle.filaments.edited_preset())
 
 
 def list_profiles(bundle):
@@ -185,10 +191,10 @@ def list_profiles(bundle):
     profiles = []
     for index in range(collection.size()):
         preset = collection.preset(index)
-        if not preset.is_user() or not preset.file:
+        if not preset.is_user() or not preset.file or not preset.is_compatible:
             continue
         try:
-            profile = calibration_profile(preset, edited, preset.name in assigned)
+            profile = calibration_profile(preset, edited)
         except ValueError as error:
             profiles.append({"name": preset.name, "issue": str(error)})
         except (TypeError, IndexError, OverflowError):
@@ -201,7 +207,7 @@ def list_profiles(bundle):
     return profiles, default
 
 
-def wall_flow(bundle, nozzle, wall):
+def wall_geometry(bundle, nozzle, wall):
     def config(key):
         return scalar(bundle.full_config_value(key))
 
@@ -217,55 +223,147 @@ def wall_flow(bundle, nozzle, wall):
     area = layer * (width - layer * (1 - math.pi / 4))
     if not all(math.isfinite(v) for v in (width, layer, speed, area)) or area <= 0 or layer <= 0 or speed < 0:
         raise ValueError(f"Check {wall} wall width, speed and layer height in the process preset.")
+    return area, speed
+
+
+def wall_flow(bundle, nozzle, wall):
+    area, speed = wall_geometry(bundle, nozzle, wall)
     return area * speed
 
 
-def selected_nozzle(bundle, printer):
+def adaptive_walls(bundle, nozzle, ceiling):
+    def config(key, fallback=None):
+        value = scalar(bundle.full_config_value(key))
+        if value is None:
+            return fallback
+        # Orca can serialize numeric vectors as text with the normal-mode limit first.
+        if isinstance(value, str):
+            value = value.split(",", 1)[0]
+        return float(value)
+
+    default = config("default_acceleration", 0.)
+    if not math.isfinite(default) or default <= 0:
+        raise ValueError("Set a positive normal printing acceleration in the active process preset.")
+    cap = config("machine_max_acceleration_extruding") or float("inf")
+    default_corner = config("default_jerk", 0.)
+    walls = {}
+    for wall in ("outer", "inner"):
+        area, speed = wall_geometry(bundle, nozzle, wall)
+        speed = min(speed or ceiling / area, ceiling / area)
+        acceleration = config(f"{wall}_wall_acceleration") or default
+        corner = (config(f"{wall}_wall_jerk", 0.) or default_corner) if default_corner else 0.
+        walls[wall] = {"flow": min(speed * area, ceiling), "speed": speed,
+                       "acceleration": min(acceleration, cap), "corner_velocity": corner}
+    return walls
+
+
+def coupon_settings(bundle, preset):
+    plate = scalar(bundle.full_config_value("curr_bed_type"))
+    if plate in (None, "", "Default Plate"):
+        plate = scalar(bundle.current_printer_preset().config_value("default_bed_type")) or "Textured PEI Plate"
+    if plate == "Default Plate":
+        plate = "Textured PEI Plate"
+    key = {"Textured PEI Plate": "textured_plate", "High Temp Plate": "hot_plate",
+           "Engineering Plate": "eng_plate", "Cool Plate": "cool_plate",
+           "Textured Cool Plate": "textured_cool_plate", "Supertack Plate": "supertack_plate"}.get(plate)
+    if key is None:
+        raise ValueError("Select a known bed type for the Adaptive PA coupon.")
+    bed = scalar(preset.config_value(key + "_temp_initial_layer"))
+    if bed is None:
+        raise ValueError(f"Set a first-layer bed temperature for {plate} in the filament preset.")
+    chamber = 0
+    if scalar(preset.config_value("activate_chamber_temp_control")) in (True, 1, "1", "true"):
+        value = scalar(preset.config_value("chamber_temperature"))
+        if value is None:
+            raise ValueError("Set a build chamber temperature in the selected filament preset.")
+        chamber = int(str(value).split(",", 1)[0])
+        if not 0 <= chamber <= 60:
+            raise ValueError("Set the Adaptive PA filament chamber target to 0–60 °C.")
+    return {"bed_temperature_c": int(str(bed).split(",", 1)[0]),
+            "chamber_temperature_c": chamber,
+            "layer_height_mm": float(scalar(bundle.full_config_value("layer_height"))),
+            "first_layer_height_mm": float(scalar(bundle.full_config_value("initial_layer_print_height")))}
+
+
+def selected_nozzle(bundle, printer=None):
     preset = bundle.current_printer_preset()
-    address = str(preset.config_value("print_host") or "")
-    host = urlsplit(address if "://" in address else "//" + address).hostname
-    if host != printer:
-        raise ValueError(f"Select the Orca printer preset that connects to {printer}.")
+    if printer is not None:
+        address = str(preset.config_value("print_host") or "")
+        host = urlsplit(address if "://" in address else "//" + address).hostname
+        if host != printer:
+            raise ValueError(f"Select the Orca printer preset that connects to {printer}.")
     return float(scalar(preset.config_value("nozzle_diameter")))
 
 
-def request_for(mode, profile, slot, printer, nozzle, outer, inner):
+def request_for(mode, profile, slot, printer, nozzle, outer, inner, *, walls=None):
     if mode not in MODES:
         raise ValueError("Choose a calibration.")
-    if not math.isclose(nozzle, .4, abs_tol=1e-6):
-        raise ValueError("This calibration requires the K2's 0.4 mm nozzle.")
     if slot["material"] != profile["material"]:
         raise ValueError("The CFS material needs to match the filament preset.")
-    if mode != "max_flow" and profile["adaptive"]:
+    if mode in ("pressure_advance", "flow_then_pa") and profile["adaptive"]:
         raise ValueError("Choose a filament preset with fixed pressure advance.")
-    if mode != "pressure_advance" and (not slot["max_flow"] or
+    if mode in ("max_flow", "flow_then_pa") and (not slot["max_flow"] or
             profile["temperature"] != (240 if profile["material"] == "PETG" else 280)):
         raise ValueError("Max Flow supports PETG at 240 °C and ABS at 280 °C in CFS unit 1.")
     payload = {"kind": mode, "printer": printer, "slot": slot["slot"], "material": profile["material"],
-               "temperature_c": profile["temperature"], "nozzle_mm": .4,
+               "temperature_c": profile["temperature"], "nozzle_mm": nozzle,
                "filament_diameter_mm": profile["diameter"], "max_flow_mm3_s": profile["flow"]}
     if mode == "pressure_advance":
         max_flow = profile["flow"]
-        lower, peak = sorted(min(flow or max_flow, max_flow) for flow in (outer, inner))
+        peak = min(outer or max_flow, max_flow)
         limit = slot["pa_peak_limits_mm3_s"].get(str(profile["temperature"]))
         if limit is None or peak > limit:
             allowed = f"up to {limit:g} mm³/s" if limit is not None else "no flow"
-            raise ValueError(f"The active wall settings request {peak:g} mm³/s. Auto PA supports {allowed} "
+            raise ValueError(f"The outer wall requests {peak:g} mm³/s. Auto PA supports {allowed} "
                              f"at {profile['temperature']} °C for {profile['material']} in CFS {slot['slot']}.")
-        payload.update(reader="continuous", lower_flow_mm3_s=lower, max_flow_mm3_s=peak)
+        payload.update(reader="continuous", max_flow_mm3_s=peak)
     elif mode == "flow_then_pa":
         payload.update(outer_wall_flow_mm3_s=outer, inner_wall_flow_mm3_s=inner)
+    elif mode == "adaptive_pa":
+        payload.update(walls=walls, pa_seed=float(profile["pa"]))
     return payload
 
 
 def describe_result(mode, result, request):
+    if mode == "adaptive_pa":
+        lines = []
+        rows = []
+        for point in result["points"]:
+            label = f"{point['wall'].capitalize()} · {point['acceleration']:g} mm/s² · target {point['flow']:.4g} mm³/s"
+            if point.get("observed_flow") is not None:
+                label += f" · recorded {point['observed_flow']:.4g} mm³/s"
+            if point["pa"] is None:
+                lines.append(f"{label} · no bracketed PA")
+                continue
+            rise, fall = point["selected_scores"]
+            lines.append(f"{label} · PA {point['pa']:.4f} · speedup {rise:.4f} · slowdown {fall:.4f}")
+            rows.append(f"{point['pa']:.4f},{point['measured_flow']:.8g},{point['acceleration']:g}")
+        changes = {}
+        if result["complete_grid"]:
+            changes = {"enable_pressure_advance": "1", "adaptive_pressure_advance": "1",
+                       "adaptive_pressure_advance_model": json.dumps("\n".join(rows))}
+            lines.extend(["", "Orca model rows (PA, flow, acceleration)", *rows])
+        else:
+            lines.append("A complete measurement grid is needed to apply a model.")
+        if result.get("report_file"):
+            lines.append(f"Adaptive PA report: {result['report_file']}")
+        return "\n".join(lines), changes
     lines, changes = [], {}
     flow = result.get("max_flow") if mode == "flow_then_pa" else result if mode == "max_flow" else None
     pa = result.get("pressure_advance") if mode == "flow_then_pa" else result if mode == "pressure_advance" else None
     if flow is not None:
         cutoff = flow.get("recommended_mm3_s")
         if cutoff is None:
-            lines.append("Max Flow found no verified pair around the 1.0 current cutoff.")
+            if flow.get("reason") == "current_below_threshold":
+                ceiling = flow["tested_through_mm3_s"]
+                step = next(row for row in flow["steps"] if row["flow_mm3_s"] == ceiling)
+                lines.append(f"Median current stayed below 1.0 through the {ceiling:g} mm³/s test ceiling "
+                             f"({step['motor_median_abs_iq']:.3f} at the ceiling).")
+            elif flow.get("reason") == "unbracketed_current":
+                lines.append(f"Max Flow tested through {flow['tested_through_mm3_s']:g} mm³/s and ran out "
+                             "of probes before verifying a pair around the 1.0 current cutoff.")
+            else:
+                lines.append("Max Flow found no verified pair around the 1.0 current cutoff.")
         else:
             lines.extend([f"Max volumetric speed: {cutoff:g} mm³/s",
                           f"{flow['below_cutoff_mm3_s']:g} mm³/s: median |Iq| {flow['below_cutoff_median_abs_iq']:.5g} (below 1.0)",
@@ -279,7 +377,7 @@ def describe_result(mode, result, request):
         peak, lower = result["pa_peak_mm3_s"], result["pa_lower_mm3_s"]
         lines.append(f"PA measurement targets: {lower:.4g} and {peak:.4g} mm³/s.")
     elif pa is not None:
-        lines.append(f"PA measurement targets: {request['lower_flow_mm3_s']:.4g} and {request['max_flow_mm3_s']:.4g} mm³/s.")
+        lines.append(f"Outer-wall PA target: {request['max_flow_mm3_s']:.4g} mm³/s.")
     if pa is not None:
         candidate = pa.get("candidate")
         if candidate is None:
@@ -288,7 +386,9 @@ def describe_result(mode, result, request):
             lines.append(f"Pressure advance: {candidate:.4f}")
             changes.update(pressure_advance=f"{candidate:.6g}", enable_pressure_advance="1")
             scores = pa.get("selected_scores")
-            if scores and len(scores) == 4:
+            if scores and len(scores) == 2:
+                lines.append(f"Outer-wall scores: speedup {scores[0]:.4f}, slowdown {scores[1]:.4f}")
+            elif scores and len(scores) == 4:
                 lines.append(f"Lower flow scores: speedup {scores[0]:.4f}, slowdown {scores[1]:.4f}")
                 lines.append(f"Higher flow scores: speedup {scores[2]:.4f}, slowdown {scores[3]:.4f}")
         if pa.get("report_file"):
@@ -330,24 +430,50 @@ class AutoCalibrations(orca.script.ScriptPluginCapabilityBase):
             self.publish(busy=False, can_cancel=False, status=str(error))
 
     def refresh(self):
-        profiles, default = list_profiles(orca.host.preset_bundle())
-        self.publish(busy=True, profiles=profiles, default_preset=default, status="Reading CFS slots…")
-        self.launch(self.read_slots, bool(profiles))
+        bundle = orca.host.preset_bundle()
+        nozzle = selected_nozzle(bundle)
+        profiles, default = list_profiles(bundle)
+        self.publish(busy=True, profiles=profiles, default_preset=default, nozzle=f"{nozzle:g}",
+                     calibration_supported=False, status="Reading the K2 nozzle setting and CFS slots…")
+        self.launch(self.read_slots, nozzle, bool(profiles))
 
-    def read_slots(self, has_profiles):
+    def read_slots(self, nozzle, has_profiles):
         try:
             health = companion("GET", "/health")
             if not health.get("combined_calibration"):
                 raise RuntimeError("Restart the K2 companion with the combined-calibration update.")
-            if not health.get("standalone_pa_uses_wall_flows"):
-                raise RuntimeError("Restart the K2 companion with the wall-flow update.")
-            slots = companion("GET", "/slots")["slots"]
+            if not health.get("standalone_pa_outer_wall_only"):
+                raise RuntimeError("Restart the K2 companion with the outer-wall PA update.")
+            sizes = health.get("supported_nozzles_mm")
+            if not sizes:
+                raise RuntimeError("Restart the K2 companion with the nozzle-detection update.")
+            setup = companion("GET", "/slots")
+            reported = setup["nozzle_mm"]
+            matches = math.isclose(nozzle, reported, rel_tol=0, abs_tol=1e-6)
+            supported = nozzle in sizes and matches
+            if nozzle not in sizes:
+                allowed = " or ".join(f"{size:g}" for size in sizes)
+                status = f"Auto Calibrations supports {allowed} mm nozzles."
+            elif not matches:
+                status = (f"Orca selected {nozzle:g} mm, but the K2 reports {reported:g} mm. "
+                          "Set the same diameter on the K2 and in Orca, then refresh.")
+            elif not has_profiles:
+                status = f"No saved filament presets are compatible with the active {nozzle:g} mm printer preset."
+            else:
+                status = "Select a filament preset and its matching CFS slot."
             self.health = health
-            status = "Select a filament preset and its matching CFS slot." if has_profiles else "Save a user filament preset in Orca first."
-            self.publish(busy=False, printer=health["printer"], slots=slots, status=status)
-        except (RuntimeError, OSError, ValueError, KeyError, http.client.HTTPException) as error:
+            self.publish(busy=False, printer=health["printer"], slots=setup["slots"], status=status,
+                         calibration_supported=supported, adaptive_supported=bool(
+                             health.get("printed_adaptive_pa") and health.get("adaptive_pa_profile_preheat")))
+        except ConnectionRefusedError:
             self.health = {}
-            self.publish(busy=False, printer=None, slots=[], status=f"Could not read the K2. {error}")
+            self.publish(busy=False, printer=None, slots=[], calibration_supported=False,
+                         status=("The K2 companion is not running. Start the 'K2 Auto PA Companion' "
+                                 "scheduled task (or run Start-K2-AutoPA-Orca.cmd), then refresh."))
+        except (RuntimeError, OSError, ValueError, KeyError, TypeError, http.client.HTTPException) as error:
+            self.health = {}
+            self.publish(busy=False, printer=None, slots=[], calibration_supported=False,
+                         status=f"Could not read the K2. {error}")
 
     def start(self, mode, name, address):
         if not self.health:
@@ -358,20 +484,32 @@ class AutoCalibrations(orca.script.ScriptPluginCapabilityBase):
         bundle = orca.host.preset_bundle()
         profile = get_profile(bundle, name)
         nozzle = selected_nozzle(bundle, self.health["printer"])
-        outer = wall_flow(bundle, nozzle, "outer") if mode != "max_flow" else 0.
-        inner = wall_flow(bundle, nozzle, "inner") if mode != "max_flow" else 0.
-        payload = request_for(mode, profile, slot, self.health["printer"], nozzle, outer, inner)
-        text = (f"{MODES[mode]} · {profile['name']} · CFS {address}\n\n"
+        if (not self.state["calibration_supported"] or f"{nozzle:g}" != self.state["nozzle"]):
+            raise ValueError("Refresh the presets and confirm that Orca and the K2 report the same nozzle diameter.")
+        wall_flow_mode = mode in ("pressure_advance", "flow_then_pa")
+        outer = wall_flow(bundle, nozzle, "outer") if wall_flow_mode else 0.
+        inner = wall_flow(bundle, nozzle, "inner") if mode == "flow_then_pa" else 0.
+        walls = adaptive_walls(bundle, nozzle, profile["flow"]) if mode == "adaptive_pa" else None
+        payload = request_for(mode, profile, slot, self.health["printer"], nozzle, outer, inner, walls=walls)
+        text = (f"{MODES[mode]} · {profile['name']} · CFS {address} · {nozzle:g} mm nozzle\n\n"
                 f"Clear the build plate and purge chute and stay by the printer. "
                 f"The nozzle will heat to {profile['temperature']} °C and the toolhead will move.")
         if mode == "flow_then_pa":
             text += ("\n\nAuto PA uses the verified Max Flow as its high target, subject to the printer's extrusion limits.")
             text += " Keep the purge chute and build area clear throughout both tests."
         elif mode == "pressure_advance":
-            ceiling = profile["flow"]
-            text += (f"\n\nPA wall-flow targets from the active process preset\n"
-                     f"Outer wall {min(outer or ceiling, ceiling):.4g} mm³/s\n"
-                     f"Inner wall {min(inner or ceiling, ceiling):.4g} mm³/s")
+            text += f"\n\nOuter-wall PA target from the active process preset: {payload['max_flow_mm3_s']:.4g} mm³/s."
+        elif mode == "adaptive_pa":
+            payload.update(coupon_settings(bundle, bundle.filaments.find_preset(name)))
+            text += (f"\n\nThe bed will heat to {payload['bed_temperature_c']} °C and soak for 3 minutes. "
+                     "The printer will then probe around the tower and brim.")
+            if payload["chamber_temperature_c"]:
+                text += f"\nThe chamber will heat to {payload['chamber_temperature_c']} °C in the background."
+            text += "\nFour combinations will record flow and pressure through the corners. Active wall settings"
+            for wall, target in walls.items():
+                text += (f"\n{wall.capitalize()} wall {target['flow']:.4g} mm³/s at "
+                         f"{target['acceleration']:.4g} mm/s²")
+            text += "\nWhen wall targets coincide, the pilot adds a slower flow or lower acceleration."
         if orca.host.ui.message(text, title=self.get_name(), buttons="yes_no", icon="question") != "yes":
             return
         self.cancel.clear()
@@ -407,9 +545,10 @@ class AutoCalibrations(orca.script.ScriptPluginCapabilityBase):
                 self.publish(status=job.get("message", "Calibration ended."))
                 return
             report, changes = describe_result(payload["kind"], job["result"], payload)
+            nozzle = payload["nozzle_mm"]
             if changes:
-                self.apply_result = (profile, changes)
-            self.publish(report=f"Filament preset: {profile['name']}\n{report}",
+                self.apply_result = (profile, changes, nozzle)
+            self.publish(report=f"Filament preset: {profile['name']} · {nozzle:g} mm nozzle\n{report}",
                          status="Calibration finished.", can_apply=bool(changes))
         except (RuntimeError, OSError, ValueError, KeyError, http.client.HTTPException) as error:
             if self.job_path:
@@ -423,8 +562,10 @@ class AutoCalibrations(orca.script.ScriptPluginCapabilityBase):
             self.publish(busy=False, can_cancel=False)
 
     def apply(self):
-        profile, changes = self.apply_result
+        profile, changes, nozzle = self.apply_result
         bundle = orca.host.preset_bundle()
+        if not math.isclose(selected_nozzle(bundle), nozzle, rel_tol=0, abs_tol=1e-6):
+            raise ValueError(f"Select the tested {nozzle:g} mm nozzle preset before applying this result.")
         if get_profile(bundle, profile["name"]) != profile:
             raise ValueError("The tested filament preset changed. Restore the tested preset before applying this result.")
         slot = next((number for number, assigned in enumerate(bundle.current_filament_presets(), 1)
