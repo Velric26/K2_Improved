@@ -4,8 +4,9 @@ import unittest
 from unittest.mock import Mock, patch
 
 from adaptive_pa_motion import COUPON_CENTER, coupon_span, wall_ring
-from run_adaptive_pa import BED_SOAK_SECONDS, RESET_OBJECTS, TOWER_OBJECT
-from run_adaptive_pa import first_layer_paths, grid, prepare_bed, print_first_layer, rank, score_printed_wall, soak_bed
+from run_adaptive_pa import BED_SOAK_SECONDS, FOUNDATION_RAMP, RESET_OBJECTS, TOWER_OBJECT
+from run_adaptive_pa import first_layer_paths, grid, prepare_bed, print_first_layer, print_foundation, rank
+from run_adaptive_pa import score_printed_wall, soak_bed
 
 
 class AdaptivePATest(unittest.TestCase):
@@ -101,6 +102,27 @@ class AdaptivePATest(unittest.TestCase):
         self.assertEqual([call.args[2] for call in ring.call_args_list], list(expected))
         self.assertEqual(sweep.send.call_args_list[0].args[0], "SET_VELOCITY_LIMIT ACCEL=500 ACCEL_TO_DECEL=250")
         self.assertIn("ADVANCE=0", sweep.send.call_args_list[0].args[1])
+        self.assertEqual(sweep.send.call_args.args, ("SET_VELOCITY_LIMIT ACCEL=20000 ACCEL_TO_DECEL=20000",))
+
+    def test_foundation_ramps_both_walls_before_measuring(self):
+        sweep = Mock()
+        sweep.status.return_value = {"toolhead": {"max_accel": 20000, "max_accel_to_decel": 20000}}
+        walls = self.request["walls"]
+        walls["outer"]["acceleration"] = 1200
+        with patch("run_adaptive_pa.print_ring") as ring:
+            used = print_foundation(sweep, 170, walls, .5, 1.75, .3, .2, .045)
+        self.assertEqual(used, len(FOUNDATION_RAMP))
+        rings = [call.args for call in ring.call_args_list]
+        self.assertEqual(len(rings), 2 * used)
+        self.assertEqual([r[4] for r in rings], [30, 30, 45, 45, 60, 60])
+        for z in {r[6] for r in rings}:
+            self.assertIn(round(z, 6), (.5, .7, .9))
+        # Each ring keeps its wall's line width at the slower speed.
+        self.assertAlmostEqual(rings[0][3] / rings[0][4], walls["inner"]["flow"] / walls["inner"]["speed"])
+        accels = [c.args[0] for c in sweep.send.call_args_list[:-1]]
+        self.assertEqual(accels, ["SET_VELOCITY_LIMIT ACCEL=1000 ACCEL_TO_DECEL=500",
+                                  "SET_VELOCITY_LIMIT ACCEL=1200 ACCEL_TO_DECEL=600",
+                                  "SET_VELOCITY_LIMIT ACCEL=1200 ACCEL_TO_DECEL=600"])
         self.assertEqual(sweep.send.call_args.args, ("SET_VELOCITY_LIMIT ACCEL=20000 ACCEL_TO_DECEL=20000",))
 
     def test_bed_soak_checks_cancellation_and_holds_for_180_seconds(self):

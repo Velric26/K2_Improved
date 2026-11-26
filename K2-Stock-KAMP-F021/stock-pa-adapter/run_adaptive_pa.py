@@ -12,8 +12,11 @@ from analyze_capture import clean_pressure, cv_segments
 from run_short_pa_sweep import CALIBRATION_SMOOTH, limit_command, motion_limits
 
 BED_SOAK_SECONDS = 180
-FIRST_LAYER_SPEED = 30
+FIRST_LAYER_SPEED = 20
 FIRST_LAYER_LIMITS = (500, 250)
+# Unmeasured layers between the first layer and the test walls, ramping (speed mm/s, accel mm/s²)
+# so the tower base bonds before the full wall speed and acceleration pull on it.
+FOUNDATION_RAMP = ((30, 1000), (45, 1500), (60, 2000))
 BRIM_WIDTH = 5.
 SKIRT_GAP = 2.
 CHAMBER_STATUS = "heater_generic chamber_heater"
@@ -174,6 +177,23 @@ def print_first_layer(sweep, span, borders, flow, diameter, height):
     sweep.send(limit_command(limits))
 
 
+def print_foundation(sweep, span, walls, inset, diameter, first, layer, seed):
+    """Print both walls slowly for FOUNDATION_RAMP layers and return the next free layer number."""
+    limits = motion_limits(sweep.status())
+    for number, (speed, accel) in enumerate(FOUNDATION_RAMP, 1):
+        sweep.check_cancel()
+        accel = min(accel, min(w["acceleration"] for w in walls.values()))
+        sweep.send(limit_command((accel, accel / 2)),
+                   f"SET_PRESSURE_ADVANCE ADVANCE={seed:.4f} SMOOTH_TIME={CALIBRATION_SMOOTH}")
+        for wall, wall_inset in (("inner", inset), ("outer", 0.)):
+            settings = walls[wall]
+            wall_speed = min(speed, settings["speed"])
+            print_ring(sweep, span, wall_inset, settings["flow"] * wall_speed / settings["speed"],
+                       wall_speed, diameter, first + number * layer)
+    sweep.send(limit_command(limits))
+    return len(FOUNDATION_RAMP)
+
+
 def score_printed_wall(data):
     plan = data["planned_segments"]
     e_area = math.pi * (plan["filament_diameter_mm"] / 2) ** 2
@@ -283,13 +303,15 @@ def measure(sweep, conditions, stamp, report, request, update):
                   first_layer={"skirt_loops": 1, "skirt_gap_mm": SKIRT_GAP,
                                "brim_loops": len(borders) - 2, "brim_width_mm": -borders[0],
                                "speed_mm_s": FIRST_LAYER_SPEED, "acceleration_mm_s2": FIRST_LAYER_LIMITS[0],
-                               "pressure_advance": 0})
+                               "pressure_advance": 0},
+                  foundation_layers=[{"speed_mm_s": s, "acceleration_mm_s2": a} for s, a in FOUNDATION_RAMP])
     sweep.check_cancel()
     report["adaptive_mesh"] = prepare_bed(sweep, skirt_moves, bed, chamber, update)
     update(f"Printing the priming skirt, brim and first layer at {FIRST_LAYER_SPEED} mm/s.")
     report["coupon_started"] = True
     print_first_layer(sweep, span, (skirt, *borders), first_flow, diameter, first)
-    layer_number = 0
+    update(f"Printing {len(FOUNDATION_RAMP)} slow base layers before the measured walls.")
+    layer_number = print_foundation(sweep, span, walls, inset, diameter, first, layer, seed)
     for index, condition in enumerate(conditions, 1):
         sweep.check_cancel()
         captures = []
