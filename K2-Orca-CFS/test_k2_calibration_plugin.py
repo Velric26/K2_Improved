@@ -87,5 +87,48 @@ class DescribeTest(unittest.TestCase):
         self.assertEqual(list(changes), ["filament_max_volumetric_speed"])
 
 
+class PollingTest(unittest.TestCase):
+    JOB = "/calibrations/" + "a" * 32
+
+    def run_job(self, replies, clock):
+        calls = []
+
+        def companion(method, endpoint, payload=None):
+            calls.append(method)
+            reply = replies.pop(0)
+            if isinstance(reply, (int, float)):
+                clock[0] += reply
+                raise TimeoutError("timed out")
+            return reply
+
+        capability = plugin.AutoCalibrations()
+        statuses = []
+        capability.publish = lambda **changes: statuses.append(changes.get("status"))
+        originals = plugin.companion, plugin.time.monotonic, plugin.time.sleep
+        plugin.companion, plugin.time.monotonic, plugin.time.sleep = companion, lambda: clock[0], lambda s: None
+        try:
+            capability.run({"kind": "auto_pa"}, {"name": "x"})
+        finally:
+            plugin.companion, plugin.time.monotonic, plugin.time.sleep = originals
+        return calls, statuses
+
+    def test_missed_polls_do_not_cancel_the_printer_job(self):
+        clock = [0.]
+
+        start = {"id": "a" * 32, "state": "running"}
+        replies = [start, 30, 30, 30, {"state": "canceled", "message": "done"}]
+        calls, statuses = self.run_job(replies, clock)
+        self.assertNotIn("DELETE", calls)
+        self.assertTrue(any(s and s.startswith("Waiting for the K2 companion") for s in statuses))
+
+    def test_long_lost_contact_cancels_and_reports(self):
+        clock = [0.]
+
+        replies = [{"id": "a" * 32, "state": "running"}, 70, 70, {"state": "canceled"}]
+        calls, statuses = self.run_job(replies, clock)
+        self.assertEqual(calls[-1], "DELETE")
+        self.assertTrue(statuses[-2].startswith("Calibration could not finish. Lost contact"))
+
+
 if __name__ == "__main__":
     unittest.main()

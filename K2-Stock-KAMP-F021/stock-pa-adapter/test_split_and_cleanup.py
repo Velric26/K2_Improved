@@ -58,5 +58,15 @@ class CleanupTest(unittest.TestCase):
             unverified_cleanup(sweep, RuntimeError("Probe failed."), False)
 
 
+class StallWatchTest(unittest.TestCase):
+    def test_reports_only_long_pauses(self):
+        import orca_auto_pa
+        times = iter([0, .25, 1, 1.3, 2, 4.5])
+        logged = []
+        orca_auto_pa.watch_for_stalls(clock=lambda: next(times), sleep=lambda s: None, log=logged.append, rounds=3)
+        self.assertEqual(len(logged), 1)
+        self.assertIn("stalled for 2.2 s", logged[0])
+
+
 if __name__ == "__main__":
     unittest.main()

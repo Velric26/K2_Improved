@@ -542,6 +542,23 @@ class Handler(BaseHTTPRequestHandler):
         self.job_response(cancel=True)
 
 
+STALL_TICK_S = .25
+STALL_REPORT_S = 1.5
+
+
+def watch_for_stalls(tick=STALL_TICK_S, report=STALL_REPORT_S, clock=time.monotonic, sleep=time.sleep,
+                     log=lambda text: print(text, file=sys.stderr, flush=True), rounds=None):
+    """Log when this process stops running for a while (GIL hog or OS throttling), which delays Orca's polls."""
+    while rounds is None or rounds > 0:
+        before = clock()
+        sleep(tick)
+        late = clock() - before - tick
+        if late >= report:
+            log(f"[{time.strftime('%d/%b/%Y %H:%M:%S')}] Companion stalled for {late:.1f} s.")
+        if rounds is not None:
+            rounds -= 1
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--host", required=True, help="Moonraker URL for the stock K2.")
@@ -551,6 +568,7 @@ def main():
     args.output.mkdir(parents=True, exist_ok=True)
     with CalibrationServer(args.port, args.host, args.output) as server:
         print(f"Orca Auto PA listening on 127.0.0.1:{args.port}", flush=True)
+        threading.Thread(target=watch_for_stalls, daemon=True).start()
         server.serve_forever()
 
 

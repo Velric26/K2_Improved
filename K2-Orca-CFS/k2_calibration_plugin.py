@@ -4,7 +4,7 @@
 # [tool.orcaslicer.plugin]
 # name = "K2 Calibration"
 # description = "Run Auto Max Flow, Auto PA, Adaptive PA and Max Flow then Adaptive PA on the Creality K2."
-# version = "1.7.0"
+# version = "1.7.1"
 # ///
 
 import http.client
@@ -136,8 +136,14 @@ PAGE = """<!doctype html>
 </script></html>"""
 
 
-def companion(method, endpoint, payload=None):
-    connection = http.client.HTTPConnection("127.0.0.1", COMPANION_PORT, timeout=3)
+REQUEST_TIMEOUT_S = 10
+# The companion runs the printer job on its own and cleans up when it ends, so a slow or
+# missed status poll is not a reason to cancel. Give up only after this long without contact.
+LOST_CONTACT_S = 120
+
+
+def companion(method, endpoint, payload=None, timeout=REQUEST_TIMEOUT_S):
+    connection = http.client.HTTPConnection("127.0.0.1", COMPANION_PORT, timeout=timeout)
     body = json.dumps(payload) if payload is not None else None
     headers = {"Content-Type": "application/json"} if body is not None else {}
     try:
@@ -541,21 +547,24 @@ class AutoCalibrations(orca.script.ScriptPluginCapabilityBase):
                 raise ValueError("The K2 companion returned an invalid calibration ID.")
             self.job_path = "/calibrations/" + job["id"]
             cancel_sent = False
-            failed_polls = 0
+            last_contact = time.monotonic()
             while job["state"] == "running":
+                waiting = None
                 try:
                     if self.cancel.is_set() and not cancel_sent:
                         job = companion("DELETE", self.job_path)
                         cancel_sent = True
                     else:
                         job = companion("GET", self.job_path)
-                    failed_polls = 0
-                except (OSError, http.client.HTTPException):
-                    failed_polls += 1
-                    if failed_polls >= 3:
-                        raise
+                    last_contact = time.monotonic()
+                except (OSError, http.client.HTTPException) as error:
+                    silent = time.monotonic() - last_contact
+                    if silent >= LOST_CONTACT_S:
+                        raise RuntimeError(f"Lost contact with the K2 companion for {silent:.0f} s ({error}).") from error
+                    waiting = f"Waiting for the K2 companion ({silent:.0f} s)… The printer job keeps running."
                 self.publish(can_cancel=not cancel_sent,
-                             status="Canceling after the current printer operation…" if cancel_sent else job.get("message", "Measuring…"))
+                             status=waiting or ("Canceling after the current printer operation…" if cancel_sent
+                                                else job.get("message", "Measuring…")))
                 if job["state"] == "running":
                     time.sleep(1)
             if job["state"] != "complete":
