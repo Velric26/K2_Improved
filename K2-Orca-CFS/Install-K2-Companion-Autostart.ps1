@@ -30,8 +30,13 @@ if (!(Test-Path -LiteralPath $launcher -PathType Leaf)) { throw "Missing $launch
 
 [Environment]::SetEnvironmentVariable('K2_PRINTER_ADDRESS', $PrinterAddress, 'User')
 
-$arguments = '-NoProfile -WindowStyle Hidden -ExecutionPolicy RemoteSigned -File "{0}" -PrinterAddress {1} -CompanionOnly' -f $launcher, $PrinterAddress
-$action = New-ScheduledTaskAction -Execute (Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe') -Argument $arguments
+$hidden = Join-Path $PSScriptRoot 'Run-Hidden.vbs'
+if (!(Test-Path -LiteralPath $hidden -PathType Leaf)) { throw "Missing $hidden" }
+$powershell = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
+# powershell.exe is a console program, so starting it directly flashes a window
+# on every run. wscript.exe has no console and starts PowerShell hidden.
+$arguments = '//B //Nologo "{0}" "{1}" -NoProfile -NonInteractive -WindowStyle Hidden -ExecutionPolicy RemoteSigned -File "{2}" -PrinterAddress {3} -CompanionOnly' -f $hidden, $powershell, $launcher, $PrinterAddress
+$action = New-ScheduledTaskAction -Execute (Join-Path $env:SystemRoot 'System32\wscript.exe') -Argument $arguments
 $user = [System.Security.Principal.WindowsIdentity]::GetCurrent().Name
 $trigger = New-ScheduledTaskTrigger -AtLogOn -User $user
 # Re-run every 15 minutes. The launcher exits at once when the companion is healthy,
