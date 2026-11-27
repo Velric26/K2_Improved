@@ -17,9 +17,43 @@
 
 On stock firmware **1.1.8.3**, the F021 Home page hides its read-only chamber tile when a heater target is set. The target widget is absent on F021, leaving a blank space. A live capture confirmed the blank at **49 °C with a 60 °C target** and showed the live **50 °C** tile again after the target returned to zero. The Home-screen patch keeps the live readout selected for model **1015 / F021**. ARM emulation verified the stock failure, the corrected warmup path, and the unchanged visibility behavior of the other tested models. [Display patch](../K2-Stock-KAMP-F021/patch_chamber_home_tile.py)
 
-The patched display executable was saved on the K2 during the November 21 ABS job. It loads on the next printer boot. The original executable is backed up at `/mnt/UDISK/k2-before-chamber-home-tile-20261121-113026/display-server`. The patch checks the original binary hash before changing it. After a firmware update, verify the new binary before reapplying any display changes.
+The touch patch below includes this Home-screen fix, so it replaces the separate patch. The original stock executable is backed up at `/mnt/UDISK/k2-before-chamber-home-tile-20261121-113026/display-server`.
 
-An earlier Pro-style keypad trial sent `M141` to the exhaust fan and left the heater target at zero. For manual control, use **Chamber Heater** in Fluidd on port **4408** or `SET_HEATER_TEMPERATURE HEATER=chamber_heater TARGET=<temperature>`. Set `TARGET=0` to clear the request. [Stock macros](../K2-Stock-KAMP-F021/overlay/gcode_macro.cfg)
+### Set the chamber from the touchscreen
+
+The chamber tiles on **Home** and **Axis/Temp** work like the nozzle and bed tiles. Tap one, enter a temperature, and the screen sends `M141 S<temperature>`. Verified on the printer on Nov 27 with display build `cdcc2660…` (SHA-256 below).
+
+| Page | Stock F021 | Patched |
+| --- | --- | --- |
+| Home | Read-only live reading. Hidden while a target is set. | Tap opens the keypad. Shows `44 °C` with no target. While heating, it shows `44 /55°C` with the target in the small grey unit font, and the tile content shifts 16 px left to stay centered. Within 1 °C of the target, it returns to `55 °C`, so the ±1 °C heater cycle does not flicker the display. |
+| Axis/Temp | Read-only live reading. | Tap opens the keypad. While a target is set, it switches to the `44 → 50 °C` view that the heated K2 models use. |
+
+The patch gives F021 the tap handlers of the heated models. On Home it attaches them to the live tile, because F021 never creates the separate heating tile. It also removes the F021 exception that kept the Axis/Temp target view hidden, and it rewrites the Home tile's update routine to show the target. The screen redraws that tile when the reading moves by more than 1 °C or the target changes. ARM emulation confirmed the tap setup matches the heated models, that other models are unchanged, and the Home text and positions for each case. [Touch patch](../K2-Stock-KAMP-F021/patch_chamber_touch.py) · [Installer](../K2-Stock-KAMP-F021/install_chamber_touch.py)
+
+The overlay makes `M141` and `M191` drive the heater, as `M140` and `M190` drive the bed:
+
+| Command | Effect |
+| --- | --- |
+| `M141 S<n>` | Sets the chamber heater target, limited to 0–60 °C, and switches the exhaust off. |
+| `M141 S0` | Turns the heater off and the exhaust switch off, as stock `M141 S0` did. |
+| `M191 S<n>` | Same as `M141`, then waits until the chamber reaches `n − 1` °C. |
+| Bare `M141` / `M191` | No action, so the K2 Mod presets' bare `M191` still skips Orca's own wait. |
+| `CHAMBER_EXHAUST S=<n>` | The stock F021 `M141`, which sets the exhaust fan's chamber limit. |
+
+Creality Print files that send `M141 S35` to keep a PLA chamber cool now heat to 35 °C instead. Orca files are unaffected, because the K2 Mod presets pass the chamber target through `START_PRINT`. Fluidd's **Chamber Heater** control and `SET_HEATER_TEMPERATURE HEATER=chamber_heater TARGET=<temperature>` still work. [Stock macros](../K2-Stock-KAMP-F021/overlay/gcode_macro.cfg)
+
+#### Reinstall after a firmware reset or update
+
+A firmware update or reset restores the stock `display-server` and stock macros. The patch only accepts the stock **1.1.8.3** binary (SHA-256 `0e23e687…25190`). If Creality ships a new release, recheck the addresses before patching.
+
+1. Reapply the stock overlay and the chamber heater as described in [Restore or roll back](#restore-or-roll-back). The overlay [`gcode_macro.cfg`](../K2-Stock-KAMP-F021/overlay/gcode_macro.cfg) already contains the chamber `M141` / `M191` / `CHAMBER_EXHAUST` macros. Restart Klipper while idle and confirm `M141` reports *Set the chamber heater target* in Fluidd's command help.
+2. Copy `/usr/bin/display-server` from the printer to the PC and build the patched binary:
+   `python K2-Stock-KAMP-F021/patch_chamber_touch.py display-server.stock display-server`
+   The script refuses any binary except stock 1.1.8.3. The result must hash to `cdcc2660653a65d55a8b00a8d65dffef70aa2b8769b48deb58e59177365f937d`.
+3. Put that `display-server` and [`install_chamber_touch.py`](../K2-Stock-KAMP-F021/install_chamber_touch.py) in one folder on the printer, for example `/mnt/UDISK/k2-chamber-touch-stage`. With every heater target at zero, run `python3 install_chamber_touch.py` there.
+4. Power-cycle the printer. Set a chamber target on Home and check the tile shows `/target°C` and the Axis/Temp arrow view.
+
+The installer changes nothing unless the printer is idle with every heater target at zero and the current binary is stock or an earlier patched build. It skips the macros when they already contain the chamber `M141`. It only installs a staged `gcode_macro.cfg` (and restarts Klipper afterwards) when the macros lack it. Replaced files are backed up to `/mnt/UDISK/k2-before-chamber-touch-<time>`. To roll back, copy the backed-up files to their original paths and power-cycle while idle.
 
 For automatic control, enable **Support controlling chamber temperature** on the Orca printer preset and **Activate temperature control** on the starting filament. The K2 Mod presets send the filament’s target and minimum to `START_PRINT` as `CHAMBER_TEMP` and `CHAMBER_MIN`. Their bare `M191` keeps Orca from adding a separate chamber wait before machine startup. The startup macro disables the exhaust during chamber heating, warms the bed alongside the chamber, and waits for the requested minimum once the bed is at temperature and any configured soak has finished. The target stays active until the normal end or cancel cleanup. The Kingroom ABS profile drives toward **55 °C** and lets probing proceed at **50 °C** once the bed and nozzle standby targets are reached. ABS adds no timed bed soak. [Verified ABS startup](K2-STOCK-FIRMWARE-KAMP-AUTO-PA.md#verified-abs-startup-reference) · [Orca chamber settings](https://github.com/OrcaSlicer/OrcaSlicer/wiki/printer_basic_information_accessory#support-controlling-chamber-temperature)
 
@@ -62,6 +96,6 @@ The unused `FAN2_C` and `RFID` headers and the proposed `BED` / `PC12` heater ro
 
 ## Restore or roll back
 
-- **Reapply on stock.** Start from a fresh backup. Install `k2_chamber_bang_bang.py` in `/usr/share/klipper/klippy/extras/` and include `chamber_heater_fan_ac.cfg` from `printer.cfg`. Remove the old `board_dissipation_fan` pin definition and its calls in `START_PRINT` and `END_PRINT` so PA0 has a single owner. Retain the stock exhaust actions and heater shutdown. With heater AC isolated, verify zero startup output, the sensor reading, and the SSR indicator before a powered check.
+- **Reapply on stock.** Start from a fresh backup. Install `k2_chamber_bang_bang.py` in `/usr/share/klipper/klippy/extras/` and include `chamber_heater_fan_ac.cfg` from `printer.cfg`. Remove the old `board_dissipation_fan` pin definition and its calls in `START_PRINT` and `END_PRINT` so PA0 has a single owner. Retain the stock exhaust actions and heater shutdown. With heater AC isolated, verify zero startup output, the sensor reading, and the SSR indicator before a powered check. Then reinstall the touchscreen chamber control as described in [Reinstall after a firmware reset or update](#reinstall-after-a-firmware-reset-or-update).
 - **Restore the previous verifier window.** The 120-second include is saved on the printer at `config/chamber_heater_fan_ac.cfg.before-240s-warmup-20261120-121642.bak`. Restore it as `chamber_heater_fan_ac.cfg` and restart while idle.
 - **Remove the heater remap.** With the heater AC isolated, compare the original files in `/mnt/UDISK/k2-before-fan-ac-heater-20261119_164300` with the current config. Restore the original PA0 output and macro calls with a targeted edit so later KAMP and calibration changes are preserved. The earlier fan-monitor module and include are in `/mnt/UDISK/k2-before-chamber-fan-monitor-20261119-231606`.
