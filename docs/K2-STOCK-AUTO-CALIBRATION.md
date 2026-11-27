@@ -39,13 +39,26 @@ The 0.6 mm run used all three refinement stages, down to **0.0005**. Its two ban
 
 Choose **Adaptive PA** in **Auto Calibrations**. The pilot crosses the active inner- and outer-wall flows with both wall accelerations. It calculates flow with the same 1.00 flow ratio as Auto PA and caps wall speed and flow with the chosen filament’s maximum volumetric speed. If the flows coincide, it also measures half the outer-wall flow. If the accelerations coincide, it also measures half the active setting, with a floor of 500 mm/s². The resulting four points are a wall-focused starting grid. Orca’s guide recommends broader sampling across flow and acceleration for a general-purpose model. [Orca Adaptive PA guide](https://github.com/OrcaSlicer/OrcaSlicer/wiki/adaptive_pressure_advance_calib)
 
-The test prints the footprint of Orca’s **PA Tower**, including its rear seam, diagonal sides, and sharp tip. It scales the original 70 mm footprint when longer straights are needed. The first layer prints one priming skirt 2 mm outside a roughly 5 mm attached brim, followed by the two tower walls. This layer runs at 20 mm/s, 500 mm/s², and zero PA. Three unscored base layers follow at 30, 45 and 60 mm/s with 1,000, 1,500 and 2,000 mm/s² (never above the wall settings), so the tower bonds to the bed before the test speeds start. The scored layers use the active profile’s wall geometry and layer height. [Orca PA Tower source](https://github.com/OrcaSlicer/OrcaSlicer/blob/main/src/slic3r/GUI/Plater.cpp#L16205-L16232)
+The test prints the footprint of Orca’s **PA Tower**, including its rear seam, diagonal sides, and sharp tip. It scales the original 70 mm footprint when longer straights are needed. The first layer prints one priming skirt 2 mm outside a 20 mm attached brim, followed by the two tower walls. This layer runs at 20 mm/s, 500 mm/s², and zero PA, with the part and auxiliary fans off as in Orca's tower; it takes about 10 minutes on the 70 mm footprint. Three unscored base layers follow at 30, 45 and 60 mm/s with 1,000, 1,500 and 2,000 mm/s² (never above the wall settings), so the tower bonds to the bed before the test speeds start. The scored layers use the active profile’s wall geometry and layer height. [Orca PA Tower source](https://github.com/OrcaSlicer/OrcaSlicer/blob/main/src/slic3r/GUI/Plater.cpp#L16205-L16232)
 
-Adaptive PA sets the selected filament’s first-layer bed temperature and starts any enabled chamber heating in parallel. Once the bed reaches its target, it soaks for 180 seconds, homes Z, and probes a fresh KAMP mesh covering the skirt. The chamber keeps warming in the background while the test proceeds. The run report records the targets, soak time, first-layer settings, mesh bounds, and probe counts. Cleanup returns chamber heating started by the test to its previous target.
+Adaptive PA starts the same way as a print of the selected filament. It defines the tower, brim and skirt as the only KAMP object, then runs the printer’s `START_PRINT` with the line Orca’s K2 start G-code would send: `START_PRINT EXTRUDER_TEMP=<test temperature> BED_TEMP=<first-layer bed> MATERIAL=<type>`, plus `CHAMBER_TEMP` and `CHAMBER_MIN` when the filament enables chamber control. Heating, the per-material bed soak, the chamber wait, homing, the adaptive mesh and the nozzle wipes therefore follow the printer macro, so a change there applies to prints and calibration alike. The test then checks that the mesh covers the skirt. Cancel takes effect when `START_PRINT` finishes. The run report records the `START_PRINT` line, first-layer settings, mesh bounds, and probe counts. Cleanup skips `END_PRINT`, which would unload the CFS filament, but returns the fans, Z stepper mode, square-corner velocity and chamber target that `START_PRINT` changed.
 
 Each candidate gets its own layer. The report records Z, PA, steady and peak flow, corner flow, and separate pressure errors entering and leaving the corners. The flow comes from Klipper’s recorded nominal extruder motion and the set filament diameter. Compare it with the printed walls to evaluate actual extrusion. The sweep uses **0.0050**, **0.0025**, then **0.0005** steps. A winning PA needs two usable traces and measured candidates on either side.
 
-With four usable points, **Apply to filament preset** uses the recorded steady flows in Orca’s Adaptive PA measurements. The fixed PA remains the fallback. Save the preset in Orca and re-slice to use it. Partial runs still report the available flow readings. The first hardware run will verify the pressure traces against visible corner quality.
+With four usable points, **Apply to filament preset** uses the recorded steady flows in Orca’s Adaptive PA measurements. The fixed PA remains the fallback. Save the preset in Orca and re-slice to use it. Partial runs still report the available flow readings. Standalone Auto PA also runs on a preset with an Adaptive PA model and updates only that fixed fallback.
+
+### Adaptive PA reference run
+
+Nov 26, 0.6 mm ABS 1C at 250 °C, bed 100 °C, chamber 55 °C (minimum 50), 0.42 mm layers, 70 mm tower with 20 mm brim, started through `START_PRINT`. All four points bracketed; 18 captures each. [Summary JSON](../K2-Stock-KAMP-F021/stock-pa-adapter/abs_c_short163754_adaptive_summary.json)
+
+| Wall | Flow (mm³/s) | Acceleration (mm/s²) | Selected PA | Speedup / slowdown score |
+| --- | ---: | ---: | ---: | --- |
+| Outer | 22.25 | 2,500 | 0.0490 | 0.0638 / 0.0637 |
+| Inner | 33.38 | 2,500 | 0.0375 | 0.0924 / 0.0794 |
+| Outer | 22.25 | 5,000 | 0.0490 | 0.0905 / 0.1069 |
+| Inner | 33.38 | 5,000 | 0.0415 | 0.0761 / 0.0742 |
+
+Mesh 71.4–188.6 × 62.0–188.6 mm, 9 × 9 probes. Compare these values with the printed corners before relying on the model.
 
 ## Auto Max Flow
 

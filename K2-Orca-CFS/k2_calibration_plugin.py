@@ -4,7 +4,7 @@
 # [tool.orcaslicer.plugin]
 # name = "K2 Calibration"
 # description = "Run Auto Max Flow, Auto PA, Adaptive PA and Max Flow then Adaptive PA on the Creality K2."
-# version = "1.7.1"
+# version = "1.8.1"
 # ///
 
 import http.client
@@ -94,7 +94,7 @@ PAGE = """<!doctype html>
       slot && preset && !preset.issue && slot.material === preset.material;
     const flow = ready && slot.max_flow;
     el('flow').disabled = !flow;
-    el('pa').disabled = !ready || preset.adaptive;
+    el('pa').disabled = !ready;
     el('adaptive').disabled = !ready || !state.adaptive_supported;
     el('both').disabled = !flow || !state.adaptive_supported;
     el('preset').disabled = state.busy || !state.profiles.length;
@@ -283,7 +283,7 @@ def coupon_settings(bundle, preset):
     bed = scalar(preset.config_value(key + "_temp_initial_layer"))
     if bed is None:
         raise ValueError(f"Set a first-layer bed temperature for {plate} in the filament preset.")
-    chamber = 0
+    chamber = chamber_min = 0
     if scalar(preset.config_value("activate_chamber_temp_control")) in (True, 1, "1", "true"):
         value = scalar(preset.config_value("chamber_temperature"))
         if value is None:
@@ -291,8 +291,13 @@ def coupon_settings(bundle, preset):
         chamber = int(str(value).split(",", 1)[0])
         if not 0 <= chamber <= 60:
             raise ValueError("Set the Adaptive PA filament chamber target to 0–60 °C.")
+        # Orca's K2 start G-code passes this as START_PRINT CHAMBER_MIN.
+        minimum = scalar(preset.config_value("chamber_minimal_temperature"))
+        chamber_min = int(float(str(minimum).split(",", 1)[0])) if minimum not in (None, "") else 0
+        if not 0 <= chamber_min <= chamber:
+            raise ValueError("Set the minimal chamber temperature between 0 °C and the chamber target.")
     return {"bed_temperature_c": int(str(bed).split(",", 1)[0]),
-            "chamber_temperature_c": chamber,
+            "chamber_temperature_c": chamber, "chamber_minimum_c": chamber_min,
             "layer_height_mm": float(scalar(bundle.full_config_value("layer_height"))),
             "first_layer_height_mm": float(scalar(bundle.full_config_value("initial_layer_print_height")))}
 
@@ -312,8 +317,6 @@ def request_for(mode, profile, slot, printer, nozzle, outer, inner, *, walls=Non
         raise ValueError("Choose a calibration.")
     if slot["material"] != profile["material"]:
         raise ValueError("The CFS material needs to match the filament preset.")
-    if mode == "pressure_advance" and profile["adaptive"]:
-        raise ValueError("Choose a filament preset with fixed pressure advance.")
     if mode in ("max_flow", "flow_then_pa") and not slot["max_flow"]:
         raise ValueError("Max Flow is not available for this CFS slot.")
     payload = {"kind": mode, "printer": printer, "slot": slot["slot"], "material": profile["material"],
@@ -524,10 +527,11 @@ class AutoCalibrations(orca.script.ScriptPluginCapabilityBase):
             if mode == "flow_then_pa":
                 text += ("\n\nStep 1 measures Max Flow. Step 2 then runs Adaptive PA with the wall flow targets "
                          "capped at the measured Max Flow. Keep the purge chute and build area clear throughout both tests.")
-            text += (f"\n\nThe bed will heat to {payload['bed_temperature_c']} °C and soak for 3 minutes. "
-                     "The printer will then probe around the tower and brim.")
+            text += ("\n\nThe printer runs its normal START_PRINT, as for a print of this filament: bed "
+                     f"{payload['bed_temperature_c']} °C, homing, a bed mesh around the tower and brim, and a nozzle wipe.")
             if payload["chamber_temperature_c"]:
-                text += f"\nThe chamber will heat to {payload['chamber_temperature_c']} °C in the background."
+                text += (f"\nThe chamber heats to {payload['chamber_temperature_c']} °C and START_PRINT waits for "
+                         f"{payload['chamber_minimum_c']} °C.")
             text += "\nFour combinations will record flow and pressure through the corners. Active wall settings"
             for wall, target in walls.items():
                 text += (f"\n{wall.capitalize()} wall {target['flow']:.4g} mm³/s at "
@@ -572,6 +576,9 @@ class AutoCalibrations(orca.script.ScriptPluginCapabilityBase):
                 return
             report, changes = describe_result(payload["kind"], job["result"], payload)
             nozzle = payload["nozzle_mm"]
+            if payload["kind"] == "pressure_advance" and profile["adaptive"]:
+                report += ("\nThis preset keeps its Adaptive PA model on. Applying updates the fixed PA, "
+                           "which Orca uses as the fallback.")
             if changes:
                 self.apply_result = (profile, changes, nozzle)
             self.publish(report=f"Filament preset: {profile['name']} · {nozzle:g} mm nozzle\n{report}",

@@ -54,6 +54,11 @@ class ProfileTest(unittest.TestCase):
 
 
 class RequestTest(unittest.TestCase):
+    def test_auto_pa_accepts_a_preset_with_an_adaptive_model(self):
+        profile = plugin.calibration_profile(Preset(adaptive_pressure_advance=["1"]), EDITED)
+        payload = plugin.request_for("pressure_advance", profile, SLOT, "192.0.2.10", .6, 20., 0.)
+        self.assertEqual((payload["kind"], payload["max_flow_mm3_s"]), ("pressure_advance", 20.))
+
     def test_max_flow_then_adaptive_pa_sends_walls_and_seed(self):
         profile = plugin.calibration_profile(Preset(), EDITED)
         payload = plugin.request_for("flow_then_pa", profile, SLOT, "192.0.2.10", .6, 0., 0., walls=WALLS)

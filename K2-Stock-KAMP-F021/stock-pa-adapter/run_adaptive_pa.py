@@ -3,7 +3,6 @@
 import json
 import math
 import statistics
-import time
 
 from adaptive_pa_motion import COUPON_CENTER, MAX_LAYER_Z, MAX_PA, MIN_ACCEL, MIN_SPAN, PRINT_COMMAND
 from adaptive_pa_motion import coupon_span, ring_gcode, wall_ring
@@ -11,14 +10,22 @@ from analyze_sweep import MAX_EDGE_GAP, interval
 from analyze_capture import clean_pressure, cv_segments
 from run_short_pa_sweep import CALIBRATION_SMOOTH, limit_command, motion_limits
 
-BED_SOAK_SECONDS = 180
+# START_PRINT heats, soaks per material, waits for the chamber minimum and meshes; allow it an hour.
+START_PRINT_TIMEOUT = 3600
+# START_PRINT switches these on for printing. Return them to the idle state END_PRINT leaves,
+# without END_PRINT's CFS unload and motor shutdown.
+END_RESTORE = ("SET_PIN PIN=extruder_fan VALUE=0", "SET_TEMPERATURE_FAN_SWITCH TEMPERATURE_FAN=chamber_fan VALUE=0",
+               "TMC2208_STEALTHCHOP STEPPER=stepper_z VAL=0.2", "PRINT_PREPARE_CLEAR")
 FIRST_LAYER_SPEED = 20
 FIRST_LAYER_LIMITS = (500, 250)
 # Unmeasured layers between the first layer and the test walls, ramping (speed mm/s, accel mm/s²)
 # so the tower base bonds before the full wall speed and acceleration pull on it.
 FOUNDATION_RAMP = ((30, 1000), (45, 1500), (60, 2000))
-BRIM_WIDTH = 5.
+BRIM_WIDTH = 20.
+# Orca's PA tower keeps the part and auxiliary fans off for its first layers; ABS warps with them on.
+FANS_OFF = ("M106 S0", "M106 P2 S0")
 SKIRT_GAP = 2.
+MESH_MARGIN = 1.
 CHAMBER_STATUS = "heater_generic chamber_heater"
 TOWER_OBJECT = "K2_ADAPTIVE_PA_TOWER"
 RESET_OBJECTS = "EXCLUDE_OBJECT_DEFINE RESET=1"
@@ -72,6 +79,9 @@ def validate_coupon(request):
     chamber = request.get("chamber_temperature_c", 0)
     if type(chamber) is not int or not 0 <= chamber <= 60:
         raise ValueError("Set the Adaptive PA filament chamber target to 0–60 °C.")
+    chamber_min = request.get("chamber_minimum_c", 0)
+    if type(chamber_min) is not int or not 0 <= chamber_min <= chamber:
+        raise ValueError("Set the filament's minimal chamber temperature from 0 °C to the chamber target.")
     for wall in request["walls"].values():
         corner = wall.get("corner_velocity", 0.)
         if type(corner) not in (int, float) or not 0 <= corner <= 25:
@@ -83,28 +93,24 @@ def chamber_target(sweep):
     return status.get(CHAMBER_STATUS, {}).get("target")
 
 
-def soak_bed(sweep, target):
-    deadline = time.monotonic() + BED_SOAK_SECONDS
-    while True:
-        sweep.check_cancel()
-        state = sweep.status()
-        if not sweep.idle(state) or state["heater_bed"]["target"] != target:
-            raise RuntimeError("The printer state or bed target changed during the Adaptive PA soak.")
-        remaining = deadline - time.monotonic()
-        if remaining <= 0:
-            return
-        time.sleep(min(remaining, 2))
+def start_print_line(temperature, material, bed, chamber=0, chamber_min=0):
+    """The same START_PRINT line Orca's K2 machine start G-code emits for this filament."""
+    line = f"START_PRINT EXTRUDER_TEMP={temperature} BED_TEMP={bed} MATERIAL={material}"
+    if chamber:
+        line += f" CHAMBER_TEMP={chamber} CHAMBER_MIN={chamber_min}"
+    return line
 
 
-def probe_tower(sweep, skirt_moves, update):
+def prepare_bed(sweep, skirt_moves, line, report, update):
+    """Run the printer's own START_PRINT with the tower as its only KAMP mesh object."""
     x, y = zip(*(move[:2] for move in skirt_moves))
-    lo_x, lo_y = (round(min(axis) - 1, 3) for axis in (x, y))
-    hi_x, hi_y = (round(max(axis) + 1, 3) for axis in (x, y))
+    skirt_lo, skirt_hi = (min(x), min(y)), (max(x), max(y))
+    # Ask KAMP for a margin past the skirt; its grid rounding may trim the edges slightly,
+    # so coverage is checked against the skirt itself.
+    lo_x, lo_y = (round(v - MESH_MARGIN, 3) for v in skirt_lo)
+    hi_x, hi_y = (round(v + MESH_MARGIN, 3) for v in skirt_hi)
     polygon = [[lo_x, lo_y], [hi_x, lo_y], [hi_x, hi_y], [lo_x, hi_y]]
     encoded = json.dumps(polygon, separators=(",", ":"))
-    update("Probing an adaptive bed mesh around the tower, brim and skirt.")
-    sweep.send("G90", "SET_GCODE_OFFSET X=0 Y=0 Z=0", "G28 Z", "M400", timeout=130)
-    sweep.check_cancel()
     try:
         sweep.send(RESET_OBJECTS,
                    f"EXCLUDE_OBJECT_DEFINE NAME={TOWER_OBJECT} CENTER={COUPON_CENTER:g},{COUPON_CENTER:g} POLYGON={encoded}")
@@ -112,41 +118,25 @@ def probe_tower(sweep, skirt_moves, update):
         if len(objects) != 1 or objects[0]["name"] != TOWER_OBJECT or objects[0].get("polygon") != polygon:
             raise RuntimeError("KAMP needs the Adaptive PA tower as its sole mesh object.")
         sweep.check_cancel()
-        sweep.send("BED_MESH_CLEAR", "BED_MESH_CALIBRATE", "M400", timeout=900)
+        update("Running the printer's START_PRINT: heating, homing, bed mesh around the tower and nozzle wipe. "
+               "Cancel takes effect when it finishes.")
+        report["start_print"] = line
+        sweep.send("G90", line, "M400", timeout=START_PRINT_TIMEOUT)
         sweep.check_cancel()
         status = sweep.read("/printer/objects/query?bed_mesh&configfile=settings")["result"]["status"]
         mesh = status["bed_mesh"]
         full = status["configfile"]["settings"]["bed_mesh"]
         matrix = mesh["probed_matrix"]
         if (not mesh["profile_name"] or not matrix or not matrix[0]
-                or any(v > limit + .05 for v, limit in zip(mesh["mesh_min"], (lo_x, lo_y), strict=True))
-                or any(v < limit - .05 for v, limit in zip(mesh["mesh_max"], (hi_x, hi_y), strict=True))
+                or any(v > limit for v, limit in zip(mesh["mesh_min"], skirt_lo, strict=True))
+                or any(v < limit for v, limit in zip(mesh["mesh_max"], skirt_hi, strict=True))
                 or (mesh["mesh_min"] == full["mesh_min"] and mesh["mesh_max"] == full["mesh_max"])):
             raise RuntimeError("The adaptive mesh did not cover the skirt or used the full bed.")
-        return {"min": mesh["mesh_min"], "max": mesh["mesh_max"],
-                "probe_count": [len(matrix[0]), len(matrix)]}
     finally:
         if sweep.idle(sweep.status()):
             sweep.send(RESET_OBJECTS)
-
-
-def prepare_bed(sweep, skirt_moves, target, chamber, update):
     sweep.park_after_purge(sweep.status())
-    preheat = f"Heating the bed to {target} °C"
-    commands = [f"M140 S{target}"]
-    if chamber:
-        preheat += f" and the chamber to {chamber} °C in the background"
-        commands.append(f"SET_HEATER_TEMPERATURE HEATER=chamber_heater TARGET={chamber}")
-    update(preheat + ".")
-    sweep.send(*commands, "M104 S140", f"M190 S{target}", timeout=360)
-    sweep.check_cancel()
-    update(f"Soaking the bed at {target} °C for {BED_SOAK_SECONDS // 60} minutes.")
-    soak_bed(sweep, target)
-    sweep.send("M109 S140", timeout=120)
-    mesh = probe_tower(sweep, skirt_moves, update)
-    sweep.check_cancel()
-    sweep.send(f"M109 S{sweep.temperature}", "M400", timeout=140)
-    return mesh
+    return {"min": mesh["mesh_min"], "max": mesh["mesh_max"], "probe_count": [len(matrix[0]), len(matrix)]}
 
 
 def print_ring(sweep, span, inset, flow, speed, diameter, z, capture=None):
@@ -169,7 +159,7 @@ def first_layer_paths(width, height, inner_wall_inset):
 
 def print_first_layer(sweep, span, borders, flow, diameter, height):
     limits = motion_limits(sweep.status())
-    sweep.send(limit_command(FIRST_LAYER_LIMITS),
+    sweep.send(*FANS_OFF, limit_command(FIRST_LAYER_LIMITS),
                f"SET_PRESSURE_ADVANCE ADVANCE=0 SMOOTH_TIME={CALIBRATION_SMOOTH}")
     for border in borders:
         sweep.check_cancel()
@@ -289,6 +279,7 @@ def measure(sweep, conditions, stamp, report, request, update):
     span = coupon_span(conditions)
     bed = request["bed_temperature_c"]
     chamber = request.get("chamber_temperature_c", 0)
+    chamber_min = request.get("chamber_minimum_c", 0)
     layer, first = request["layer_height_mm"], request["first_layer_height_mm"]
     walls = request["walls"]
     inset = sum(w["flow"] / w["speed"] for w in walls.values()) / (2 * layer)
@@ -299,14 +290,15 @@ def measure(sweep, conditions, stamp, report, request, update):
     first_flow, skirt, borders = first_layer_paths(width, first, inset)
     _, skirt_moves = wall_ring(span, skirt, first_flow, FIRST_LAYER_SPEED, diameter)
     report.update(span_mm=span, bed_temperature_c=bed, chamber_temperature_c=chamber,
-                  bed_soak_seconds=BED_SOAK_SECONDS, layer_height_mm=layer, first_layer_height_mm=first,
+                  chamber_minimum_c=chamber_min, layer_height_mm=layer, first_layer_height_mm=first,
                   first_layer={"skirt_loops": 1, "skirt_gap_mm": SKIRT_GAP,
                                "brim_loops": len(borders) - 2, "brim_width_mm": -borders[0],
                                "speed_mm_s": FIRST_LAYER_SPEED, "acceleration_mm_s2": FIRST_LAYER_LIMITS[0],
                                "pressure_advance": 0},
                   foundation_layers=[{"speed_mm_s": s, "acceleration_mm_s2": a} for s, a in FOUNDATION_RAMP])
     sweep.check_cancel()
-    report["adaptive_mesh"] = prepare_bed(sweep, skirt_moves, bed, chamber, update)
+    line = start_print_line(sweep.temperature, sweep.material, bed, chamber, chamber_min)
+    report["adaptive_mesh"] = prepare_bed(sweep, skirt_moves, line, report, update)
     update(f"Printing the priming skirt, brim and first layer at {FIRST_LAYER_SPEED} mm/s.")
     report["coupon_started"] = True
     print_first_layer(sweep, span, (skirt, *borders), first_flow, diameter, first)

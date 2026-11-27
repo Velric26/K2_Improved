@@ -18,6 +18,8 @@ COUPON_CENTER = 130.
 MIN_SPAN = 70.
 MAX_SPAN = 170.
 MAX_LAYER_Z = 55.
+# Outward offset allowed for first-layer brim and skirt rings.
+MAX_BRIM_OFFSET = 30.
 # XY section of OrcaSlicer's calib/pressure_advance/tower_with_seam.drc,
 # translated to center the 70 mm footprint and starting at the rear seam.
 TOWER_OUTLINE = ((0., 35.), (-35., 34.75), (-35., 0.), (0., -35.), (35., 0.), (35., 34.75))
@@ -37,7 +39,7 @@ def coupon_span(points):
 def wall_ring(span, inset, flow, speed, diameter):
     """Return the rear seam and moves for a uniformly scaled PA tower perimeter."""
     if (not all(math.isfinite(v) for v in (span, inset, flow, speed, diameter))
-            or not MIN_SPAN <= span <= MAX_SPAN or not -12 <= inset <= 1.2
+            or not MIN_SPAN <= span <= MAX_SPAN or not -MAX_BRIM_OFFSET <= inset <= 1.2
             or not 0 < speed <= MAX_SPEED or diameter <= 0 or not .01 <= flow / speed <= 1.):
         raise ValueError("The requested tower wall or extrusion width is outside the calibration bounds.")
     outline = [(COUPON_CENTER + x * span / 70, COUPON_CENTER + y * span / 70) for x, y in TOWER_OUTLINE]

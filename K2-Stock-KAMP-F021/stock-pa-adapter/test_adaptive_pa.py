@@ -4,9 +4,9 @@ import unittest
 from unittest.mock import Mock, patch
 
 from adaptive_pa_motion import COUPON_CENTER, coupon_span, wall_ring
-from run_adaptive_pa import BED_SOAK_SECONDS, FOUNDATION_RAMP, RESET_OBJECTS, TOWER_OBJECT
+from run_adaptive_pa import FOUNDATION_RAMP, RESET_OBJECTS, START_PRINT_TIMEOUT, TOWER_OBJECT
 from run_adaptive_pa import first_layer_paths, grid, prepare_bed, print_first_layer, print_foundation, rank
-from run_adaptive_pa import score_printed_wall, soak_bed
+from run_adaptive_pa import score_printed_wall, start_print_line
 
 
 class AdaptivePATest(unittest.TestCase):
@@ -46,52 +46,10 @@ class AdaptivePATest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "longer straight"):
             coupon_span([{"speed": 400., "acceleration": 500.}])
 
-    def test_preheat_soaks_before_probing_the_skirt_with_no_chamber_wait(self):
-        for chamber in (0, 55):
-            with self.subTest(chamber=chamber):
-                sweep = Mock(temperature=280)
-                events = Mock()
-                events.attach_mock(sweep, "sweep")
-                flow, inset, _ = first_layer_paths(.62, .3, .53)
-                _, skirt = wall_ring(70, inset, flow, 30, 1.75)
-                mesh = {"profile_name": "default", "mesh_min": [86, 83], "mesh_max": [174, 174],
-                        "probed_matrix": [[0.] * 7] * 7}
-
-                def read(path):
-                    if "exclude_object" in path:
-                        define = sweep.send.call_args.args[-1]
-                        polygon = json.loads(define.split("POLYGON=")[1])
-                        status = {"exclude_object": {"objects": [{"name": TOWER_OBJECT, "polygon": polygon}]}}
-                    else:
-                        status = {"bed_mesh": mesh, "configfile": {"settings": {
-                            "bed_mesh": {"mesh_min": [5, 5], "mesh_max": [255, 255]}}}}
-                    return {"result": {"status": status}}
-
-                sweep.read.side_effect = read
-                with patch("run_adaptive_pa.soak_bed") as soak:
-                    events.attach_mock(soak, "soak")
-                    result = prepare_bed(sweep, skirt, 100, chamber, Mock())
-                    soak.assert_called_once_with(sweep, 100)
-
-                commands = [call.args for call in sweep.send.call_args_list]
-                heat = ["M140 S100"]
-                if chamber:
-                    heat.append("SET_HEATER_TEMPERATURE HEATER=chamber_heater TARGET=55")
-                self.assertEqual(commands[0], (*heat, "M104 S140", "M190 S100"))
-                names = [call[0] for call in events.mock_calls]
-                first_send = names.index("sweep.send")
-                self.assertLess(first_send, names.index("soak"))
-                self.assertLess(names.index("soak"), names.index("sweep.send", first_send + 1))
-                self.assertEqual(commands[3][0], RESET_OBJECTS)
-                self.assertIn("POLYGON=[[", commands[3][1])
-                self.assertEqual(commands[4:], [("BED_MESH_CLEAR", "BED_MESH_CALIBRATE", "M400"),
-                                               (RESET_OBJECTS,), ("M109 S280", "M400")])
-                self.assertEqual(result["probe_count"], [7, 7])
-
     def test_first_layer_primes_with_a_separate_skirt_and_uses_brim_settings(self):
         flow, skirt, borders = first_layer_paths(.62, .3, .53)
-        self.assertEqual(len(borders) - 2, 9)
-        self.assertAlmostEqual(-borders[0], 5., places=1)
+        self.assertEqual(len(borders) - 2, 36)
+        self.assertAlmostEqual(-borders[0], 20., places=0)
         self.assertAlmostEqual(borders[0] - skirt - .62, 2.)
         self.assertEqual(borders[-2:], (.53, 0.))
         expected = (skirt, *borders)
@@ -100,8 +58,9 @@ class AdaptivePATest(unittest.TestCase):
         with patch("run_adaptive_pa.print_ring") as ring:
             print_first_layer(sweep, 70, expected, flow, 1.75, .3)
         self.assertEqual([call.args[2] for call in ring.call_args_list], list(expected))
-        self.assertEqual(sweep.send.call_args_list[0].args[0], "SET_VELOCITY_LIMIT ACCEL=500 ACCEL_TO_DECEL=250")
-        self.assertIn("ADVANCE=0", sweep.send.call_args_list[0].args[1])
+        self.assertEqual(sweep.send.call_args_list[0].args[:3],
+                         ("M106 S0", "M106 P2 S0", "SET_VELOCITY_LIMIT ACCEL=500 ACCEL_TO_DECEL=250"))
+        self.assertIn("ADVANCE=0", sweep.send.call_args_list[0].args[3])
         self.assertEqual(sweep.send.call_args.args, ("SET_VELOCITY_LIMIT ACCEL=20000 ACCEL_TO_DECEL=20000",))
 
     def test_foundation_ramps_both_walls_before_measuring(self):
@@ -125,17 +84,56 @@ class AdaptivePATest(unittest.TestCase):
                                   "SET_VELOCITY_LIMIT ACCEL=1200 ACCEL_TO_DECEL=600"])
         self.assertEqual(sweep.send.call_args.args, ("SET_VELOCITY_LIMIT ACCEL=20000 ACCEL_TO_DECEL=20000",))
 
-    def test_bed_soak_checks_cancellation_and_holds_for_180_seconds(self):
+    def probe(self, mesh_min, mesh_max, line="START_PRINT EXTRUDER_TEMP=250 BED_TEMP=100 MATERIAL=ABS"):
+        skirt = [(72.4, 63.0, 0), (187.6, 187.6, 0)]
         sweep = Mock()
-        sweep.status.return_value = {"heater_bed": {"target": 100}}
-        delays = []
-        with patch("run_adaptive_pa.time.monotonic", side_effect=lambda: sum(delays)), \
-                patch("run_adaptive_pa.time.sleep", side_effect=delays.append):
-            soak_bed(sweep, 100)
-        self.assertEqual(sum(delays), 180)
-        self.assertEqual(sum(delays), BED_SOAK_SECONDS)
-        self.assertLessEqual(max(delays), 2)
-        self.assertEqual(sweep.check_cancel.call_count, len(delays) + 1)
+        sweep.idle.return_value = True
+        defined = []
+
+        def read(path):
+            if "exclude_object" in path:
+                polygon = json.loads(sweep.send.call_args.args[-1].split("POLYGON=")[1])
+                defined.append(polygon)
+                status = {"exclude_object": {"objects": [{"name": TOWER_OBJECT, "polygon": polygon}]}}
+            else:
+                status = {"bed_mesh": {"profile_name": "default", "mesh_min": mesh_min, "mesh_max": mesh_max,
+                                       "probed_matrix": [[0.] * 9] * 9},
+                          "configfile": {"settings": {"bed_mesh": {"mesh_min": [5, 5], "mesh_max": [255, 255]}}}}
+            return {"result": {"status": status}}
+
+        sweep.read.side_effect = read
+        report = {}
+        result = prepare_bed(sweep, skirt, line, report, Mock())
+        self.sends = [call for call in sweep.send.call_args_list]
+        self.sweep, self.report, self.defined = sweep, report, defined
+        return result
+
+    def test_startup_runs_the_printers_start_print_with_the_tower_as_mesh_object(self):
+        line = "START_PRINT EXTRUDER_TEMP=250 BED_TEMP=100 MATERIAL=ABS CHAMBER_TEMP=55 CHAMBER_MIN=50"
+        self.probe([71, 62], [189, 189], line)
+        define, start, reset = self.sends
+        self.assertEqual(define.args[0], RESET_OBJECTS)
+        self.assertIn(f"NAME={TOWER_OBJECT}", define.args[1])
+        self.assertEqual(self.defined[0], [[71.4, 62.0], [188.6, 62.0], [188.6, 188.6], [71.4, 188.6]])
+        self.assertEqual(start.args, ("G90", line, "M400"))
+        self.assertEqual(start.kwargs["timeout"], START_PRINT_TIMEOUT)
+        self.assertEqual(reset.args, (RESET_OBJECTS,))
+        self.assertEqual(self.report["start_print"], line)
+        self.sweep.park_after_purge.assert_called_once()
+
+    def test_start_print_line_matches_orca_machine_start_gcode(self):
+        self.assertEqual(start_print_line(250, "ABS", 100, 55, 50),
+                         "START_PRINT EXTRUDER_TEMP=250 BED_TEMP=100 MATERIAL=ABS CHAMBER_TEMP=55 CHAMBER_MIN=50")
+        self.assertEqual(start_print_line(240, "PETG", 80),
+                         "START_PRINT EXTRUDER_TEMP=240 BED_TEMP=80 MATERIAL=PETG")
+
+    def test_mesh_rounded_inside_the_margin_still_covers_the_skirt(self):
+        # KAMP stopped 0.05 mm short of the 1 mm margin on a real 20 mm brim run.
+        self.assertEqual(self.probe([71.38, 62.01], [188.58, 188.57])["probe_count"], [9, 9])
+        with self.assertRaisesRegex(RuntimeError, "did not cover"):
+            self.probe([72.5, 62.01], [188.58, 188.57])
+        with self.assertRaisesRegex(RuntimeError, "did not cover"):
+            self.probe([71.38, 62.01], [188.58, 187.5])
 
     def test_scores_both_directions_and_records_cruise_and_corner_flow(self):
         area = math.pi * (.875 ** 2)

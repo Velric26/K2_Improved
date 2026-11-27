@@ -12,7 +12,7 @@ from urllib.parse import urlsplit
 from uuid import uuid4
 
 from adaptive_pa_motion import PRINT_CAPABILITY as WALL_CAPABILITY, PRINT_COMMAND as WALL_COMMAND
-from run_adaptive_pa import chamber_target, grid as wall_grid, measure as measure_walls, validate_coupon
+from run_adaptive_pa import END_RESTORE, chamber_target, grid as wall_grid, measure as measure_walls, validate_coupon
 from run_direct_pa_refinement import measure as measure_direct, rank as rank_direct
 from run_max_flow import COMMAND as CURRENT_FLOW_COMMAND, HOST_LIMITS, MIN_FLOW, SLOT_SUPPORT, MaxFlowRun, probe_ceiling
 from run_short_pa_sweep import MATERIAL_CODES, MOTION, PROFILES, SENSOR, Sweep, limit_command, motion_limits, preset_flows, require_nozzle
@@ -190,6 +190,10 @@ def run_calibration(host, output, request, cancel, update):
             raise RuntimeError("Install the K2 printed-wall Adaptive PA adapter before starting this test.")
         if not {"_BMC_KAMP_INNER", "EXCLUDE_OBJECT_DEFINE", "BED_MESH_CLEAR"} <= commands.keys():
             raise RuntimeError("Adaptive PA needs KAMP and object definitions for tower bed probing.")
+        if "START_PRINT" not in commands:
+            raise RuntimeError("Adaptive PA runs the printer's START_PRINT macro, which this K2 does not have.")
+        original_corner = sweep.read("/printer/objects/query?toolhead=square_corner_velocity")[
+            "result"]["status"]["toolhead"]["square_corner_velocity"]
         if chamber:
             original_chamber = chamber_target(sweep)
             if original_chamber is None or "SET_HEATER_TEMPERATURE" not in commands:
@@ -305,6 +309,9 @@ def run_calibration(host, output, request, cancel, update):
                 restore_chamber = True
             if direct_report.get("coupon_started") and sweep.status()["toolhead"]["homed_axes"] == "xyz":
                 cleanup.extend(("G91", "G1 Z2 F600", "G90", "M400"))
+            if direct_report.get("start_print"):
+                cleanup.extend(END_RESTORE)
+            cleanup.append(f"SET_VELOCITY_LIMIT SQUARE_CORNER_VELOCITY={original_corner:g}")
         if find_max_flow:
             cleanup.append("M400")
         if direct or adaptive:
