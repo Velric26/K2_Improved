@@ -109,8 +109,12 @@ class ChamberBangBang:
                                     gcmd.get_float("NOZZLE", above=0.), datetime.now())
         if request is None or request[0] == self.preheated_job:
             return
-        self.gcode.run_script_from_command("M141 S0\n"
-                                           "SET_HEATER_TEMPERATURE HEATER=chamber_heater TARGET=%g" % request[1])
+        # Close the exhaust first. The overlay's M141 S0 no longer does that, so call the
+        # stock exhaust macro by its overlay name and fall back to stock M141 S0 without it.
+        exhaust = ("CHAMBER_EXHAUST S=0" if self.printer.lookup_object("gcode_macro CHAMBER_EXHAUST", None)
+                   else "M141 S0")
+        self.gcode.run_script_from_command(
+            "%s\nSET_HEATER_TEMPERATURE HEATER=chamber_heater TARGET=%g" % (exhaust, request[1]))
         self.preheated_job, self.preheat_target = request
         self.preheat_deadline = now + PREHEAT_TIMEOUT
         self.reactor.update_timer(self.preheat_timer, now + 1.)

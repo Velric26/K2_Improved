@@ -55,6 +55,13 @@ if (!$health) {
     $logRoot = Join-Path $env:LOCALAPPDATA 'K2AutoPA'
     New-Item -ItemType Directory -Path $logRoot -Force | Out-Null
     $reportDirectory = Join-Path $logRoot 'reports'
+    # Start-Process truncates its log files. Keep the previous run's logs, which explain a crash.
+    foreach ($name in @('helper', 'helper-errors')) {
+        $log = Join-Path $logRoot "$name.log"
+        if (Test-Path -LiteralPath $log -PathType Leaf) {
+            Move-Item -LiteralPath $log -Destination (Join-Path $logRoot "$name.previous.log") -Force
+        }
+    }
     $arguments = @('-u', ('"' + $helper + '"'), '--host', $moonraker, '--output', ('"' + $reportDirectory + '"'))
     $process = Start-Process -FilePath $python -ArgumentList $arguments -WindowStyle Hidden `
         -RedirectStandardOutput (Join-Path $logRoot 'helper.log') `

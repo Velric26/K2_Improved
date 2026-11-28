@@ -4,7 +4,7 @@
 # [tool.orcaslicer.plugin]
 # name = "K2 Calibration"
 # description = "Run Auto Max Flow, Auto PA, Adaptive PA and Max Flow then Adaptive PA on the Creality K2."
-# version = "1.8.1"
+# version = "1.8.2"
 # ///
 
 import http.client
@@ -646,8 +646,9 @@ class AutoCalibrations(orca.script.ScriptPluginCapabilityBase):
             self.publish(status=str(error))
 
     def on_window_close(self):
+        # A running calibration keeps going. Reopen Auto Calibrations to follow it, cancel it
+        # or apply its result.
         self.window = None
-        self.cancel.set()
 
     def on_unload(self):
         self.cancel.set()

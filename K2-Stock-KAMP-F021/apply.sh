@@ -19,14 +19,15 @@ from urllib.request import urlopen
 
 url = ("http://127.0.0.1:7125/printer/objects/query"
        "?print_stats=state&virtual_sdcard=is_active&pause_resume=is_paused"
-       "&webhooks=state&heater_bed=target&extruder=target")
+       "&webhooks=state&heater_bed=target&extruder=target&heater_generic%20chamber_heater=target")
 with urlopen(url, timeout=5) as response:
     status = json.load(response)["result"]["status"]
+heaters = ("heater_bed", "extruder", "heater_generic chamber_heater")
 if (status["webhooks"]["state"] != "ready"
         or status["print_stats"]["state"] in ("printing", "paused")
         or status["virtual_sdcard"]["is_active"]
         or status["pause_resume"]["is_paused"]
-        or any(status[h]["target"] for h in ("heater_bed", "extruder"))):
+        or any(status.get(h, {}).get("target") for h in heaters)):
     raise SystemExit("The stock printer must be idle with its heaters off.")
 PY
 }

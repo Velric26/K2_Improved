@@ -2,7 +2,8 @@
 
 Stage next to this script:
   display-server   built with patch_chamber_touch.py from the stock 1.1.8.3 binary (required)
-  gcode_macro.cfg  only when the printer's macros still lack the chamber M141 (optional)
+  gcode_macro.cfg  the repository overlay's file, only when the printer's macros still lack
+                   the chamber M141 (optional)
 
 Changes nothing unless the printer is idle with every heater target at zero and each
 file on the printer is a known version. Backs replaced files up first.
@@ -27,9 +28,13 @@ FILES = (
       "0a483fdb356943c926ce0cd484b224e0579b5cb1e860069be2853e99b2896f6c",   # current/target in one label
       "14071bd3313430d8a5d610a984ba26f68edd8689b2c24183b56805fdd8dd95ef"),  # small /target, not centered
      "cdcc2660653a65d55a8b00a8d65dffef70aa2b8769b48deb58e59177365f937d"),
+    # The staged macros are checked for the chamber sections instead of one exact hash, so the
+    # repository overlay (with or without local edits) can be staged.
     (MACROS, "gcode_macro.cfg",
-     ("ce274ba2682ab336bf00c005f6638b367795718ae2108efb79ce35445528576d",),
-     "87aab97da830d228d154fbf8d6944e9261992bd3eb96ea1ec410382566c72cae"),
+     # Stock macros are not listed: the overlay needs the KAMP files that apply.sh installs.
+     ("1fe1cc28d1941c2a56a1ba3d70e43341171500de5e4298fe63da57e66518bcae",   # first KAMP overlay archive
+      "ce274ba2682ab336bf00c005f6638b367795718ae2108efb79ce35445528576d"),  # KAMP with heater, no chamber M141
+     None),
 )
 API = "http://127.0.0.1:7125"
 
@@ -48,8 +53,11 @@ def query(fields):
 
 
 def idle_problem():
-    status = query("webhooks=state&print_stats=state&virtual_sdcard=is_active&pause_resume=is_paused"
-                   "&extruder=target&heater_bed=target&heater_generic%20chamber_heater=target")
+    try:
+        status = query("webhooks=state&print_stats=state&virtual_sdcard=is_active&pause_resume=is_paused"
+                       "&extruder=target&heater_bed=target&heater_generic%20chamber_heater=target")
+    except (OSError, ValueError, KeyError) as error:
+        return "Klipper is not ready (%s)" % error
     if status["webhooks"]["state"] != "ready":
         return "Klipper is not ready"
     if status["print_stats"]["state"] in ("printing", "paused") or status["virtual_sdcard"]["is_active"] \
@@ -60,8 +68,8 @@ def idle_problem():
     return "heater targets are set: " + ", ".join(hot) if hot else None
 
 
-def macros_installed():
-    with open(MACROS, encoding="utf-8", errors="replace") as source:
+def macros_installed(path=None):
+    with open(path or MACROS, encoding="utf-8", errors="replace") as source:
         text = source.read()
     return "[gcode_macro CHAMBER_EXHAUST]" in text and "HEATER=chamber_heater TARGET={target}" in text
 
@@ -79,7 +87,11 @@ def main():
         if target == MACROS and not os.path.exists(staged):
             sys.exit("The printer macros lack the chamber M141. Install the overlay gcode_macro.cfg first. "
                      "Nothing was changed.")
-        if digest(staged) != after:
+        if after is None:
+            if not macros_installed(staged):
+                sys.exit("Staged %s lacks the chamber M141 macros. Nothing was changed." % os.path.basename(staged))
+            after = digest(staged)
+        elif digest(staged) != after:
             sys.exit("Staged %s is damaged. Nothing was changed." % os.path.basename(staged))
         current = digest(target)
         if current == after:
