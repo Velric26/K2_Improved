@@ -6,6 +6,7 @@ Stock-firmware improvements for the **Creality K2 Combo (F021)**, tested against
 - [Orca Auto PA and Auto Max Flow](docs/K2-STOCK-AUTO-CALIBRATION.md)
 - [Chamber heater and USB vent expansion](docs/K2-DIY-CHAMBER-HEATER.md)
 - [Stock CFS mapping and cutter behavior](docs/K2-stock-CFS-behavior.md)
+- [Open-source alternatives (plan B)](docs/K2-OPEN-SOURCE-ALTERNATIVES.md)
 
 ## Set up the Orca companion
 
